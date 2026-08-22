@@ -1,0 +1,674 @@
+"""Calculate magnetic bands and Hofstadter spectra for the local model."""
+
+from __future__ import annotations
+
+import base64
+from dataclasses import dataclass
+from fractions import Fraction
+from math import gcd
+from pathlib import Path
+import tomllib
+from typing import Final
+
+import numpy as np
+from numpy.typing import NDArray
+
+from interactive import save_linked_figure
+from model import Model, load_model
+
+
+FloatArray = NDArray[np.float64]
+ComplexArray = NDArray[np.complex128]
+_TWO_PI: Final = 2.0 * np.pi
+_LOCAL_INPUT: Final = Path(__file__).with_name("model.toml")
+_FIGURE_DIR: Final = Path(__file__).with_name("figure")
+_DATA_DIR: Final = Path(__file__).with_name("data")
+_DPI: Final = 220
+
+
+@dataclass(frozen=True, slots=True)
+class BandTask:
+    p: int
+    q: int
+    chi: int
+    vertices: FloatArray
+    n_k: int
+
+
+@dataclass(frozen=True, slots=True)
+class SpectrumTask:
+    chi: int
+    flux_min: float
+    flux_max: float
+    q_max: int
+    k_mesh: tuple[int, int]
+
+
+def _integer(table: dict[str, object], key: str, minimum: int) -> int:
+    value = table.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise ValueError(f"'{key}' must be an integer >= {minimum}.")
+    return value
+
+
+def _direction(table: dict[str, object]) -> int:
+    chi = table.get("chi")
+    if isinstance(chi, bool) or not isinstance(chi, int) or chi not in (-1, 1):
+        raise ValueError("'chi' must be +1 or -1.")
+    return chi
+
+
+def _number(table: dict[str, object], key: str) -> float:
+    value = table.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"'{key}' must be a finite real number.")
+    value = float(value)
+    if not np.isfinite(value):
+        raise ValueError(f"'{key}' must be a finite real number.")
+    return value
+
+
+def _validate_flux(p: int, q: int, chi: int) -> None:
+    if isinstance(p, bool) or not isinstance(p, int) or p < 0:
+        raise ValueError("'p' must be a nonnegative integer.")
+    if isinstance(q, bool) or not isinstance(q, int) or q < 1:
+        raise ValueError("'q' must be a positive integer.")
+    if isinstance(chi, bool) or not isinstance(chi, int) or chi not in (-1, 1):
+        raise ValueError("'chi' must be +1 or -1.")
+    divisor = gcd(p, q)
+    if divisor != 1:
+        raise ValueError(
+            f"p={p} and q={q} must be coprime; use p={p // divisor}, "
+            f"q={q // divisor}."
+        )
+
+
+def _parse_path(text: object) -> FloatArray:
+    if not isinstance(text, str):
+        raise ValueError("'k_path' must be a multiline string.")
+
+    vertices = []
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        fields = line.split("#", 1)[0].split()
+        if not fields:
+            continue
+        if len(fields) != 2:
+            raise ValueError(f"Hofstadter path line {line_number} needs k1 and k2.")
+        try:
+            point = [float(fields[0]), float(fields[1])]
+        except ValueError as error:
+            raise ValueError(
+                f"Invalid coordinate on Hofstadter path line {line_number}."
+            ) from error
+        if not np.all(np.isfinite(point)):
+            raise ValueError(
+                f"Non-finite coordinate on Hofstadter path line {line_number}."
+            )
+        vertices.append(point)
+
+    if len(vertices) < 2:
+        raise ValueError("'k_path' must contain at least two points.")
+    return np.asarray(vertices, dtype=np.float64)
+
+
+def load_hofstadter_task() -> BandTask | SpectrumTask:
+    """Read the active ``[hofstadter]`` task from ``model.toml``."""
+
+    with _LOCAL_INPUT.open("rb") as stream:
+        data = tomllib.load(stream)
+    root = data.get("hofstadter")
+    if not isinstance(root, dict):
+        raise ValueError("Missing '[hofstadter]' section.")
+
+    mode = root.get("mode")
+    if mode == "band":
+        table = root.get("band")
+        if not isinstance(table, dict):
+            raise ValueError("Missing '[hofstadter.band]' section.")
+        p = _integer(table, "p", 0)
+        q = _integer(table, "q", 1)
+        chi = _direction(table)
+        _validate_flux(p, q, chi)
+        vertices = _parse_path(table.get("k_path"))
+        return BandTask(p, q, chi, vertices, _integer(table, "n_k", 2))
+
+    if mode == "spectrum":
+        table = root.get("spectrum")
+        if not isinstance(table, dict):
+            raise ValueError("Missing '[hofstadter.spectrum]' section.")
+        flux_min = _number(table, "flux_min")
+        flux_max = _number(table, "flux_max")
+        if flux_min < 0.0 or flux_max < flux_min:
+            raise ValueError("Require 0 <= flux_min <= flux_max.")
+
+        mesh = table.get("k_mesh")
+        if (
+            not isinstance(mesh, list)
+            or len(mesh) != 2
+            or any(
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value < 1
+                for value in mesh
+            )
+        ):
+            raise ValueError("'k_mesh' must contain two positive integers.")
+        return SpectrumTask(
+            _direction(table),
+            flux_min,
+            flux_max,
+            _integer(table, "q_max", 1),
+            (mesh[0], mesh[1]),
+        )
+
+    raise ValueError("'[hofstadter].mode' must be 'band' or 'spectrum'.")
+
+
+def _as_k_points(k_points: object) -> tuple[FloatArray, bool]:
+    points = np.asarray(k_points, dtype=np.float64)
+    single_point = points.ndim == 1
+    if single_point:
+        points = points[None, :]
+    if points.ndim != 2 or points.shape[0] == 0 or points.shape[1] != 2:
+        raise ValueError("'k_points' must have shape (2,) or (N_k, 2).")
+    if not np.all(np.isfinite(points)):
+        raise ValueError("'k_points' must contain only finite values.")
+    return np.ascontiguousarray(points), single_point
+
+
+def magnetic_hamiltonian(
+    model: Model,
+    p: int,
+    q: int,
+    chi: int,
+    k_points: object,
+) -> ComplexArray:
+    """Evaluate the article's explicit oblique-gauge matrix element."""
+
+    _validate_flux(p, q, chi)
+    points, single_point = _as_k_points(k_points)
+    dimension = q * model.n_orbitals
+    matrices = np.zeros((points.shape[0], dimension, dimension), dtype=np.complex128)
+    s_prime = np.arange(q, dtype=np.int64)
+    signed_flux = chi * p / q
+
+    for hopping in model.hoppings:
+        alpha = hopping.alpha1
+        alpha_prime = hopping.alpha2
+
+        # Delta_{j,mu}^{alpha,alpha'} = ell_{j,mu} + xi_mu^alpha - xi_mu^alpha'.
+        delta1 = hopping.ell1 + model.tau[alpha, 0] - model.tau[alpha_prime, 0]
+        delta2 = hopping.ell2 + model.tau[alpha, 1] - model.tau[alpha_prime, 1]
+
+        # delta^(q)_{s,s'+ell_{j,1}} fixes one row s for every s'.
+        s = (s_prime + hopping.ell1) % q
+        row = s * model.n_orbitals + alpha
+        column = s_prime * model.n_orbitals + alpha_prime
+
+        # The three factors below are the three exponentials in the article,
+        # in the same order as the explicit oblique-gauge formula.
+        k_phase = np.exp(
+            -1j
+            * _TWO_PI
+            * (points[:, 0] * delta1 / q + points[:, 1] * delta2)
+        )
+        translation_phase = np.exp(
+            1j
+            * _TWO_PI
+            * signed_flux
+            * (s_prime - s + hopping.ell1)
+            * model.tau[alpha_prime, 1]
+        )
+        peierls_phase = np.exp(
+            -1j
+            * np.pi
+            * signed_flux
+            * (2.0 * s + 2.0 * model.tau[alpha, 0] - delta1)
+            * delta2
+        )
+        matrices[:, row, column] += (
+            hopping.amplitude
+            * k_phase[:, None]
+            * (translation_phase * peierls_phase)[None, :]
+        )
+
+    return matrices[0] if single_point else matrices
+
+
+def magnetic_energies(
+    model: Model,
+    p: int,
+    q: int,
+    chi: int,
+    k_points: object,
+    *,
+    batch_size: int = 128,
+) -> FloatArray:
+    """Return sorted eigenvalues without retaining every magnetic matrix."""
+
+    _validate_flux(p, q, chi)
+    points, single_point = _as_k_points(k_points)
+    if (
+        isinstance(batch_size, bool)
+        or not isinstance(batch_size, int)
+        or batch_size < 1
+    ):
+        raise ValueError("'batch_size' must be a positive integer.")
+
+    energies = np.empty((points.shape[0], q * model.n_orbitals), dtype=np.float64)
+    for start in range(0, points.shape[0], batch_size):
+        stop = min(start + batch_size, points.shape[0])
+        energies[start:stop] = np.linalg.eigvalsh(
+            magnetic_hamiltonian(model, p, q, chi, points[start:stop])
+        )
+    return energies[0] if single_point else energies
+
+
+def rational_fluxes(
+    flux_min: float,
+    flux_max: float,
+    q_max: int,
+) -> list[tuple[int, int]]:
+    """List every reduced p/q in the closed interval with q <= q_max."""
+
+    lower = Fraction(str(flux_min))
+    upper = Fraction(str(flux_max))
+    fractions = []
+    for q in range(1, q_max + 1):
+        p_min = (lower.numerator * q + lower.denominator - 1) // lower.denominator
+        p_max = (upper.numerator * q) // upper.denominator
+        for p in range(p_min, p_max + 1):
+            if gcd(p, q) == 1:
+                fractions.append((p, q))
+    fractions.sort(key=lambda pair: Fraction(pair[0], pair[1]))
+    return fractions
+
+
+def _sample_path(
+    vertices: FloatArray,
+    reciprocal: FloatArray,
+    n_k: int,
+) -> tuple[FloatArray, FloatArray, FloatArray]:
+    k_parts = []
+    distance_parts = []
+    tick_positions = [0.0]
+    distance = 0.0
+
+    for index, (start, stop) in enumerate(zip(vertices[:-1], vertices[1:])):
+        length = float(np.linalg.norm(reciprocal @ (stop - start)))
+        if length == 0.0:
+            raise ValueError("Consecutive points in 'k_path' must be different.")
+        fraction = np.linspace(0.0, 1.0, n_k)
+        k_segment = start + fraction[:, None] * (stop - start)
+        distance_segment = distance + fraction * length
+        if index:
+            k_segment = k_segment[1:]
+            distance_segment = distance_segment[1:]
+        k_parts.append(k_segment)
+        distance_parts.append(distance_segment)
+        distance += length
+        tick_positions.append(distance)
+
+    return (
+        np.concatenate(k_parts),
+        np.concatenate(distance_parts),
+        np.asarray(tick_positions),
+    )
+
+
+def _magnetic_mesh(q: int, shape: tuple[int, int]) -> FloatArray:
+    """Sample k1 in [0,1) and the nonredundant k2 interval [0,1/q)."""
+
+    k1 = np.arange(shape[0], dtype=np.float64) / shape[0]
+    k2 = np.arange(shape[1], dtype=np.float64) / (q * shape[1])
+    mesh1, mesh2 = np.meshgrid(k1, k2, indexing="ij")
+    return np.column_stack((mesh1.ravel(), mesh2.ravel()))
+
+
+def _plot_imports() -> tuple[object, object]:
+    try:
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        from matplotlib.figure import Figure
+    except ImportError as error:
+        raise ImportError("Plotting requires Matplotlib.") from error
+    return Figure, FigureCanvasAgg
+
+
+def _coordinate_label(point: FloatArray) -> str:
+    return rf"$({point[0]:.4g},{point[1]:.4g})$"
+
+
+def run_band(model: Model, task: BandTask) -> tuple[Path, Path]:
+    """Calculate, save, and plot one rational-flux magnetic band structure."""
+
+    reciprocal = np.column_stack((model.b1 / task.q, model.b2))
+    k_points, distance, tick_positions = _sample_path(
+        task.vertices, reciprocal, task.n_k
+    )
+    energies = magnetic_energies(model, task.p, task.q, task.chi, k_points)
+    stem = f"{model.name}_hofstadter_chi{task.chi}_p{task.p}_q{task.q}_band"
+
+    _DATA_DIR.mkdir(exist_ok=True)
+    data_path = _DATA_DIR / f"{stem}.dat"
+    path_text = " -> ".join(
+        f"({point[0]:.10g},{point[1]:.10g})" for point in task.vertices
+    )
+    columns = "distance k1 k2 " + " ".join(
+        f"E{index}" for index in range(task.q * model.n_orbitals)
+    )
+    header = (
+        f"Phi/Phi0 = {task.chi * task.p}/{task.q}\n"
+        "k = k1*P1 + k2*P2, P1 = b1/q, P2 = b2\n"
+        f"path = {path_text}\ncolumns: {columns}"
+    )
+    np.savetxt(
+        data_path,
+        np.column_stack((distance, k_points, energies)),
+        fmt="%.16e",
+        header=header,
+    )
+
+    Figure, FigureCanvasAgg = _plot_imports()
+    _FIGURE_DIR.mkdir(exist_ok=True)
+    figure_path = _FIGURE_DIR / f"{stem}.png"
+    figure = Figure(figsize=(6.0, 4.5), layout="constrained")
+    FigureCanvasAgg(figure)
+    axes = figure.subplots()
+    axes.plot(distance, energies, color="0.12", linewidth=0.9)
+    for position in tick_positions:
+        axes.axvline(position, color="0.82", linewidth=0.8, zorder=0)
+    axes.set_xticks(
+        tick_positions,
+        [_coordinate_label(point) for point in task.vertices],
+    )
+    axes.set_xlim(distance[0], distance[-1])
+    axes.set_xlabel(r"$\mathbf{k}=k_1\mathbf{P}_1+k_2\mathbf{P}_2$")
+    axes.set_ylabel(r"$E$")
+    axes.set_title(
+        rf"{model.name}: $\Phi/\Phi_0={task.chi * task.p}/{task.q}$"
+    )
+    axes.margins(x=0.0)
+    figure.savefig(figure_path, dpi=_DPI)
+    figure.clear()
+    return data_path, figure_path
+
+
+def _number_tag(value: float) -> str:
+    return f"{value:.10g}".replace("-", "m").replace(".", "p")
+
+
+def _packed_spectrum_mask(
+    flux: FloatArray,
+    energy: FloatArray,
+    flux_min: float,
+    flux_max: float,
+    energy_min: float,
+    energy_max: float,
+    *,
+    width: int = 1200,
+    height: int = 800,
+) -> tuple[int, int, str]:
+    """Rasterize every sampled eigenvalue into a compact one-bit image."""
+
+    x = np.rint(
+        (flux - flux_min) / (flux_max - flux_min) * (width - 1)
+    ).astype(np.int32)
+    y = np.rint(
+        (energy_max - energy) / (energy_max - energy_min) * (height - 1)
+    ).astype(np.int32)
+    np.clip(x, 0, width - 1, out=x)
+    np.clip(y, 0, height - 1, out=y)
+
+    # A two-pixel mark stays visible when the browser scales the canvas down.
+    x_next = np.minimum(x + 1, width - 1)
+    y_next = np.minimum(y + 1, height - 1)
+    mask = np.zeros((height, width), dtype=np.uint8)
+    mask[y, x] = 1
+    mask[y, x_next] = 1
+    mask[y_next, x] = 1
+    mask[y_next, x_next] = 1
+    packed = np.packbits(mask.ravel(), bitorder="big")
+    encoded = base64.b64encode(packed.tobytes()).decode("ascii")
+    return width, height, encoded
+
+
+def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Path]:
+    """Calculate the spectrum and its density-flux Wannier diagram."""
+
+    fractions = rational_fluxes(task.flux_min, task.flux_max, task.q_max)
+    if not fractions:
+        raise ValueError("The requested range contains no fraction with q <= q_max.")
+    hopping_scale = max(abs(hopping.amplitude) for hopping in model.hoppings)
+    gap_tolerance = 0.01 * hopping_scale
+
+    stem = (
+        f"{model.name}_hofstadter_chi{task.chi}_flux"
+        f"{_number_tag(task.flux_min)}_to_{_number_tag(task.flux_max)}"
+        f"_qmax{task.q_max}"
+    )
+    _DATA_DIR.mkdir(exist_ok=True)
+    data_path = _DATA_DIR / f"{stem}_spectrum.npz"
+    flux_data = []
+    p_data = []
+    q_data = []
+    k1_data = []
+    k2_data = []
+    band_data = []
+    energy_data = []
+    wannier_flux_data = []
+    wannier_p_data = []
+    wannier_q_data = []
+    wannier_band_data = []
+    wannier_density_data = []
+    wannier_gap_data = []
+    interactive_groups = []
+
+    for p, q in fractions:
+        k_points = _magnetic_mesh(q, task.k_mesh)
+        energies = magnetic_energies(model, p, q, task.chi, k_points)
+        n_bands = q * model.n_orbitals
+        count = k_points.shape[0] * n_bands
+        flux_data.append(np.full(count, task.chi * p / q))
+        p_data.append(np.full(count, p, dtype=np.int32))
+        q_data.append(np.full(count, q, dtype=np.int32))
+        k1_data.append(np.repeat(k_points[:, 0], n_bands))
+        k2_data.append(np.repeat(k_points[:, 1], n_bands))
+        band_data.append(
+            np.tile(np.arange(n_bands, dtype=np.int32), k_points.shape[0])
+        )
+        energy_data.append(energies.ravel())
+
+        band_min = energies.min(axis=0)
+        band_max = energies.max(axis=0)
+        gaps = band_min[1:] - band_max[:-1]
+        filled_bands = np.flatnonzero(gaps > gap_tolerance) + 1
+        gap_intervals = np.column_stack(
+            (
+                filled_bands,
+                band_max[filled_bands - 1],
+                band_min[filled_bands],
+            )
+        ).ravel()
+        interactive_groups.append(
+            [
+                p,
+                q,
+                np.round(gap_intervals, 8).tolist(),
+            ]
+        )
+        if filled_bands.size:
+            wannier_flux_data.append(
+                np.full(filled_bands.size, task.chi * p / q)
+            )
+            wannier_p_data.append(np.full(filled_bands.size, p, dtype=np.int32))
+            wannier_q_data.append(np.full(filled_bands.size, q, dtype=np.int32))
+            wannier_band_data.append(filled_bands.astype(np.int32, copy=False))
+            wannier_density_data.append(filled_bands / q)
+            wannier_gap_data.append(gaps[filled_bands - 1])
+
+    flux_data = np.concatenate(flux_data)
+    energy_data = np.concatenate(energy_data)
+    if wannier_gap_data:
+        wannier_flux = np.concatenate(wannier_flux_data)
+        wannier_p = np.concatenate(wannier_p_data)
+        wannier_q = np.concatenate(wannier_q_data)
+        wannier_band = np.concatenate(wannier_band_data)
+        wannier_density = np.concatenate(wannier_density_data)
+        wannier_gap = np.concatenate(wannier_gap_data)
+    else:
+        wannier_flux = np.empty(0, dtype=np.float64)
+        wannier_p = np.empty(0, dtype=np.int32)
+        wannier_q = np.empty(0, dtype=np.int32)
+        wannier_band = np.empty(0, dtype=np.int32)
+        wannier_density = np.empty(0, dtype=np.float64)
+        wannier_gap = np.empty(0, dtype=np.float64)
+
+    np.savez_compressed(
+        data_path,
+        name=model.name,
+        chi=np.int8(task.chi),
+        flux_min=task.flux_min,
+        flux_max=task.flux_max,
+        q_max=task.q_max,
+        k_mesh=np.asarray(task.k_mesh, dtype=np.int32),
+        wannier_gap_threshold=gap_tolerance,
+        flux=flux_data,
+        p=np.concatenate(p_data),
+        q=np.concatenate(q_data),
+        k1=np.concatenate(k1_data),
+        k2=np.concatenate(k2_data),
+        band=np.concatenate(band_data),
+        energy=energy_data,
+        wannier_flux=wannier_flux,
+        wannier_p=wannier_p,
+        wannier_q=wannier_q,
+        wannier_band=wannier_band,
+        wannier_density=wannier_density,
+        wannier_gap=wannier_gap,
+    )
+
+    Figure, FigureCanvasAgg = _plot_imports()
+    _FIGURE_DIR.mkdir(exist_ok=True)
+    spectrum_path = _FIGURE_DIR / f"{stem}_spectrum.png"
+    figure = Figure(figsize=(6.0, 5.0), layout="constrained")
+    FigureCanvasAgg(figure)
+    axes = figure.subplots()
+    axes.scatter(
+        flux_data,
+        energy_data,
+        s=0.25,
+        marker="o",
+        color="0.08",
+        linewidths=0.0,
+        rasterized=True,
+    )
+    signed_bounds = sorted((task.chi * task.flux_min, task.chi * task.flux_max))
+    if signed_bounds[0] != signed_bounds[1]:
+        padding = 0.01 * (signed_bounds[1] - signed_bounds[0])
+        axes.set_xlim(signed_bounds[0] - padding, signed_bounds[1] + padding)
+    axes.set_xlabel(r"$\Phi/\Phi_0$")
+    axes.set_ylabel(r"$E$")
+    axes.set_title(f"{model.name}: Hofstadter spectrum")
+    axes.margins(x=0.01, y=0.03)
+    figure.savefig(spectrum_path, dpi=_DPI)
+    figure.clear()
+
+    wannier_path = _FIGURE_DIR / f"{stem}_wannier.png"
+    figure = Figure(figsize=(6.0, 5.0), layout="constrained")
+    FigureCanvasAgg(figure)
+    axes = figure.subplots()
+    if wannier_gap.size:
+        from matplotlib.colors import LinearSegmentedColormap, PowerNorm
+
+        gap_colormap = LinearSegmentedColormap.from_list(
+            "gap_size",
+            ("#ffffff", "#1769aa"),
+        )
+        gap_norm = PowerNorm(
+            gamma=0.5,
+            vmin=0.0,
+            vmax=float(wannier_gap.max()),
+        )
+        points = axes.scatter(
+            wannier_flux,
+            wannier_density,
+            c=wannier_gap,
+            s=1.0,
+            marker="o",
+            cmap=gap_colormap,
+            norm=gap_norm,
+            linewidths=0.0,
+            rasterized=True,
+        )
+        figure.colorbar(points, ax=axes, label=r"Gap size $\Delta E$")
+    signed_bounds = sorted((task.chi * task.flux_min, task.chi * task.flux_max))
+    if signed_bounds[0] != signed_bounds[1]:
+        padding = 0.01 * (signed_bounds[1] - signed_bounds[0])
+        axes.set_xlim(signed_bounds[0] - padding, signed_bounds[1] + padding)
+    axes.set_ylim(0.0, float(model.n_orbitals))
+    axes.set_xlabel(r"$\Phi/\Phi_0$")
+    axes.set_ylabel(r"$n$ per primitive cell")
+    axes.set_title(f"{model.name}: Wannier diagram")
+    axes.margins(x=0.01)
+    figure.savefig(wannier_path, dpi=_DPI)
+    figure.clear()
+
+    interactive_path = _FIGURE_DIR / f"{stem}_interactive.html"
+    signed_bounds = sorted((task.chi * task.flux_min, task.chi * task.flux_max))
+    if signed_bounds[0] == signed_bounds[1]:
+        flux_padding = 0.01 * max(1.0, abs(signed_bounds[0]))
+        signed_bounds = [
+            signed_bounds[0] - flux_padding,
+            signed_bounds[1] + flux_padding,
+        ]
+    if task.chi < 0:
+        interactive_groups.reverse()
+    interactive_energy_min = float(energy_data.min())
+    interactive_energy_max = float(energy_data.max())
+    energy_padding = 0.025 * max(
+        1e-12,
+        interactive_energy_max - interactive_energy_min,
+    )
+    interactive_energy_min -= energy_padding
+    interactive_energy_max += energy_padding
+    spectrum_width, spectrum_height, spectrum_mask = _packed_spectrum_mask(
+        flux_data,
+        energy_data,
+        signed_bounds[0],
+        signed_bounds[1],
+        interactive_energy_min,
+        interactive_energy_max,
+    )
+    save_linked_figure(
+        interactive_path,
+        name=model.name,
+        n_orbitals=model.n_orbitals,
+        chi=task.chi,
+        flux_min=signed_bounds[0],
+        flux_max=signed_bounds[1],
+        energy_min=interactive_energy_min,
+        energy_max=interactive_energy_max,
+        spectrum_width=spectrum_width,
+        spectrum_height=spectrum_height,
+        spectrum_mask=spectrum_mask,
+        gap_threshold=gap_tolerance,
+        groups=interactive_groups,
+    )
+    return data_path, spectrum_path, wannier_path, interactive_path
+
+
+def main() -> None:
+    model = load_model()
+    task = load_hofstadter_task()
+    if isinstance(task, BandTask):
+        output_paths = run_band(model, task)
+    else:
+        output_paths = run_spectrum(model, task)
+
+    print("Real-space Hermiticity check passed.")
+    for path in output_paths:
+        print(f"Saved {path}")
+
+
+if __name__ == "__main__":
+    main()
