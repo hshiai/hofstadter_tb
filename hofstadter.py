@@ -434,8 +434,8 @@ def _packed_spectrum_mask(
     energy_min: float,
     energy_max: float,
     *,
-    width: int = 1200,
-    height: int = 800,
+    width: int = 1360,
+    height: int = 900,
 ) -> tuple[int, int, str]:
     """Rasterize every sampled eigenvalue into a compact one-bit image."""
 
@@ -592,7 +592,7 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
     axes.scatter(
         flux_data,
         energy_data,
-        s=0.45,
+        s=0.35,
         marker="o",
         color="0.05",
         linewidths=0.0,

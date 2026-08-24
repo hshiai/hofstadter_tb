@@ -113,8 +113,8 @@ n_k = 80
 chi = 1
 flux_min = 0.0
 flux_max = 1.0
-q_max = 67
+q_max = 61
 
 # Minimum mesh for large q. Small q uses the denser adaptive mesh below.
-k_mesh = [6, 6]
-k_mesh_q1 = [20, 20]
+k_mesh = [3, 3]
+k_mesh_q1 = [30, 30]

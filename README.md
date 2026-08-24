@@ -37,8 +37,9 @@ Each model is stored in a TOML file. Run the commands from this directory:
 cd hofstadter_tb
 ```
 
-The repository includes square, triangular, honeycomb, QWZ, topological
-flat-band, and $p4$ example inputs. Pass the desired TOML file to any command:
+The repository includes square, triangular, honeycomb, Kagome, QWZ,
+topological flat-band, and $p4$ example inputs. Pass the desired TOML file to
+any command:
 
 ```bash
 python3 model.py example_triangular.toml

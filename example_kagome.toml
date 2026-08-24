@@ -1,25 +1,37 @@
-name = "triangular"
+name = "kagome"
 
 a1 = [1.0, 0.0]
 a2 = [0.5, 0.8660254037844386]
 
-# One orbital at the Bravais-lattice point.
+# Three Kagome sublattices in fractional coordinates.
 # tau[alpha] = [xi_1^alpha, xi_2^alpha]
 tau = [
-  [0.0, 0.0]
+  [0.0, 0.0],
+  [0.5, 0.0],
+  [0.0, 0.5],
 ]
 
-# Nearest-neighbor hopping t = 1 along
-# +/-a1, +/-a2, and +/-(a2-a1).
+# Nearest-neighbor hopping t = 1.
 # h(alpha1, alpha2, ell): alpha2 -> alpha1
 # j  alpha1  alpha2  ell1  ell2  Re(t)  Im(t)
 hopping = '''
-0   0   0    1   0   -1.0   0.0
-1   0   0    0   1   -1.0   0.0
-2   0   0   -1   1   -1.0   0.0
-3   0   0   -1   0   -1.0   0.0
-4   0   0    0  -1   -1.0   0.0
-5   0   0    1  -1   -1.0   0.0
+# Sublattices 0 <-> 1
+0    0   1    0   0   -1.0   0.0
+1    0   1    1   0   -1.0   0.0
+2    1   0    0   0   -1.0   0.0
+3    1   0   -1   0   -1.0   0.0
+
+# Sublattices 0 <-> 2
+4    0   2    0   0   -1.0   0.0
+5    0   2    0   1   -1.0   0.0
+6    2   0    0   0   -1.0   0.0
+7    2   0    0  -1   -1.0   0.0
+
+# Sublattices 1 <-> 2
+8    1   2    0   0   -1.0   0.0
+9    1   2   -1   1   -1.0   0.0
+10   2   1    0   0   -1.0   0.0
+11   2   1    1  -1   -1.0   0.0
 '''
 
 # k = k1*b1 + k2*b2
@@ -62,7 +74,7 @@ n_k = 80
 chi = 1
 flux_min = 0.0
 flux_max = 1.0
-q_max = 67
+q_max = 61
 
 # Minimum mesh for large q. Small q uses the denser adaptive mesh below.
 k_mesh = [3, 3]
