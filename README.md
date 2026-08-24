@@ -38,7 +38,7 @@ cd hofstadter_tb
 ```
 
 The repository includes square, triangular, honeycomb, Kagome, QWZ,
-topological flat-band, and $p4$ example inputs. Pass the desired TOML file to
+topological flat-band, and imbalanced-bipartite flat-band (IBF) example inputs. Pass the desired TOML file to
 any command:
 
 ```bash
