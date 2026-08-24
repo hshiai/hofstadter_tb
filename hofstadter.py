@@ -29,14 +29,12 @@ _DPI: Final = 220
 class BandTask:
     p: int
     q: int
-    chi: int
     vertices: FloatArray
     n_k: int
 
 
 @dataclass(frozen=True, slots=True)
 class SpectrumTask:
-    chi: int
     flux_min: float
     flux_max: float
     q_max: int
@@ -44,18 +42,17 @@ class SpectrumTask:
     k_mesh_q1: tuple[int, int] | None
 
 
-def _integer(table: dict[str, object], key: str, minimum: int) -> int:
+def _integer(
+    table: dict[str, object],
+    key: str,
+    minimum: int | None = None,
+) -> int:
     value = table.get(key)
-    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"'{key}' must be an integer.")
+    if minimum is not None and value < minimum:
         raise ValueError(f"'{key}' must be an integer >= {minimum}.")
     return value
-
-
-def _direction(table: dict[str, object]) -> int:
-    chi = table.get("chi")
-    if isinstance(chi, bool) or not isinstance(chi, int) or chi not in (-1, 1):
-        raise ValueError("'chi' must be +1 or -1.")
-    return chi
 
 
 def _number(table: dict[str, object], key: str) -> float:
@@ -68,14 +65,12 @@ def _number(table: dict[str, object], key: str) -> float:
     return value
 
 
-def _validate_flux(p: int, q: int, chi: int) -> None:
-    if isinstance(p, bool) or not isinstance(p, int) or p < 0:
-        raise ValueError("'p' must be a nonnegative integer.")
+def _validate_flux(p: int, q: int) -> None:
+    if isinstance(p, bool) or not isinstance(p, int):
+        raise ValueError("'p' must be an integer.")
     if isinstance(q, bool) or not isinstance(q, int) or q < 1:
         raise ValueError("'q' must be a positive integer.")
-    if isinstance(chi, bool) or not isinstance(chi, int) or chi not in (-1, 1):
-        raise ValueError("'chi' must be +1 or -1.")
-    divisor = gcd(p, q)
+    divisor = gcd(abs(p), q)
     if divisor != 1:
         raise ValueError(
             f"p={p} and q={q} must be coprime; use p={p // divisor}, "
@@ -125,12 +120,11 @@ def load_hofstadter_task(path: Path) -> BandTask | SpectrumTask:
         table = root.get("band")
         if not isinstance(table, dict):
             raise ValueError("Missing '[hofstadter.band]' section.")
-        p = _integer(table, "p", 0)
+        p = _integer(table, "p")
         q = _integer(table, "q", 1)
-        chi = _direction(table)
-        _validate_flux(p, q, chi)
+        _validate_flux(p, q)
         vertices = _parse_path(table.get("k_path"))
-        return BandTask(p, q, chi, vertices, _integer(table, "n_k", 2))
+        return BandTask(p, q, vertices, _integer(table, "n_k", 2))
 
     if mode == "spectrum":
         table = root.get("spectrum")
@@ -138,8 +132,8 @@ def load_hofstadter_task(path: Path) -> BandTask | SpectrumTask:
             raise ValueError("Missing '[hofstadter.spectrum]' section.")
         flux_min = _number(table, "flux_min")
         flux_max = _number(table, "flux_max")
-        if flux_min < 0.0 or flux_max < flux_min:
-            raise ValueError("Require 0 <= flux_min <= flux_max.")
+        if flux_max < flux_min:
+            raise ValueError("Require flux_min <= flux_max.")
 
         mesh = table.get("k_mesh")
         if (
@@ -171,7 +165,6 @@ def load_hofstadter_task(path: Path) -> BandTask | SpectrumTask:
                     "the corresponding 'k_mesh' values."
                 )
         return SpectrumTask(
-            _direction(table),
             flux_min,
             flux_max,
             _integer(table, "q_max", 1),
@@ -198,17 +191,16 @@ def magnetic_hamiltonian(
     model: Model,
     p: int,
     q: int,
-    chi: int,
     k_points: object,
 ) -> ComplexArray:
     """Evaluate the article's explicit oblique-gauge matrix element."""
 
-    _validate_flux(p, q, chi)
+    _validate_flux(p, q)
     points, single_point = _as_k_points(k_points)
     dimension = q * model.n_orbitals
     matrices = np.zeros((points.shape[0], dimension, dimension), dtype=np.complex128)
     s_prime = np.arange(q, dtype=np.int64)
-    signed_flux = chi * p / q
+    flux = p / q
 
     for hopping in model.hoppings:
         alpha = hopping.alpha1
@@ -233,14 +225,14 @@ def magnetic_hamiltonian(
         translation_phase = np.exp(
             1j
             * _TWO_PI
-            * signed_flux
+            * flux
             * (s_prime - s + hopping.ell1)
             * model.tau[alpha_prime, 1]
         )
         peierls_phase = np.exp(
             -1j
             * np.pi
-            * signed_flux
+            * flux
             * (2.0 * s + 2.0 * model.tau[alpha, 0] - delta1)
             * delta2
         )
@@ -257,14 +249,13 @@ def magnetic_energies(
     model: Model,
     p: int,
     q: int,
-    chi: int,
     k_points: object,
     *,
     batch_size: int = 128,
 ) -> FloatArray:
     """Return sorted eigenvalues without retaining every magnetic matrix."""
 
-    _validate_flux(p, q, chi)
+    _validate_flux(p, q)
     points, single_point = _as_k_points(k_points)
     if (
         isinstance(batch_size, bool)
@@ -277,7 +268,7 @@ def magnetic_energies(
     for start in range(0, points.shape[0], batch_size):
         stop = min(start + batch_size, points.shape[0])
         energies[start:stop] = np.linalg.eigvalsh(
-            magnetic_hamiltonian(model, p, q, chi, points[start:stop])
+            magnetic_hamiltonian(model, p, q, points[start:stop])
         )
     return energies[0] if single_point else energies
 
@@ -287,7 +278,7 @@ def rational_fluxes(
     flux_max: float,
     q_max: int,
 ) -> list[tuple[int, int]]:
-    """List every reduced p/q in the closed interval with q <= q_max."""
+    """List every signed reduced p/q in the closed interval."""
 
     lower = Fraction(str(flux_min))
     upper = Fraction(str(flux_max))
@@ -374,8 +365,10 @@ def run_band(model: Model, task: BandTask) -> tuple[Path, Path]:
     k_points, distance, tick_positions = _sample_path(
         task.vertices, reciprocal, task.n_k
     )
-    energies = magnetic_energies(model, task.p, task.q, task.chi, k_points)
-    stem = f"{model.name}_hofstadter_chi{task.chi}_p{task.p}_q{task.q}_band"
+    energies = magnetic_energies(model, task.p, task.q, k_points)
+    stem = (
+        f"{model.name}_hofstadter_p{_number_tag(task.p)}_q{task.q}_band"
+    )
 
     _DATA_DIR.mkdir(exist_ok=True)
     data_path = _DATA_DIR / f"{stem}.dat"
@@ -386,7 +379,7 @@ def run_band(model: Model, task: BandTask) -> tuple[Path, Path]:
         f"E{index}" for index in range(task.q * model.n_orbitals)
     )
     header = (
-        f"Phi/Phi0 = {task.chi * task.p}/{task.q}\n"
+        f"Phi/Phi0 = {task.p}/{task.q}\n"
         "k = k1*P1 + k2*P2, P1 = b1/q, P2 = b2\n"
         f"path = {path_text}\ncolumns: {columns}"
     )
@@ -413,9 +406,7 @@ def run_band(model: Model, task: BandTask) -> tuple[Path, Path]:
     axes.set_xlim(distance[0], distance[-1])
     axes.set_xlabel(r"$\mathbf{k}=k_1\mathbf{P}_1+k_2\mathbf{P}_2$")
     axes.set_ylabel(r"$E$")
-    axes.set_title(
-        rf"{model.name}: $\Phi/\Phi_0={task.chi * task.p}/{task.q}$"
-    )
+    axes.set_title(rf"{model.name}: $\Phi/\Phi_0={task.p}/{task.q}$")
     axes.margins(x=0.0)
     figure.savefig(figure_path, dpi=_DPI)
     figure.clear()
@@ -467,14 +458,18 @@ def _packed_spectrum_mask(
 def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Path]:
     """Calculate the spectrum and its density-flux Wannier diagram."""
 
-    fractions = rational_fluxes(task.flux_min, task.flux_max, task.q_max)
+    fractions = rational_fluxes(
+        task.flux_min,
+        task.flux_max,
+        task.q_max,
+    )
     if not fractions:
         raise ValueError("The requested range contains no fraction with q <= q_max.")
     hopping_scale = max(abs(hopping.amplitude) for hopping in model.hoppings)
     gap_tolerance = 0.01 * hopping_scale
 
     stem = (
-        f"{model.name}_hofstadter_chi{task.chi}_flux"
+        f"{model.name}_hofstadter_flux"
         f"{_number_tag(task.flux_min)}_to_{_number_tag(task.flux_max)}"
         f"_qmax{task.q_max}"
     )
@@ -496,11 +491,12 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
     interactive_groups = []
 
     for p, q in fractions:
+        flux = p / q
         k_points = _magnetic_mesh(q, _spectrum_mesh(task, q))
-        energies = magnetic_energies(model, p, q, task.chi, k_points)
+        energies = magnetic_energies(model, p, q, k_points)
         n_bands = q * model.n_orbitals
         count = k_points.shape[0] * n_bands
-        flux_data.append(np.full(count, task.chi * p / q))
+        flux_data.append(np.full(count, flux))
         p_data.append(np.full(count, p, dtype=np.int32))
         q_data.append(np.full(count, q, dtype=np.int32))
         k1_data.append(np.repeat(k_points[:, 0], n_bands))
@@ -529,9 +525,7 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
             ]
         )
         if filled_bands.size:
-            wannier_flux_data.append(
-                np.full(filled_bands.size, task.chi * p / q)
-            )
+            wannier_flux_data.append(np.full(filled_bands.size, flux))
             wannier_p_data.append(np.full(filled_bands.size, p, dtype=np.int32))
             wannier_q_data.append(np.full(filled_bands.size, q, dtype=np.int32))
             wannier_band_data.append(filled_bands.astype(np.int32, copy=False))
@@ -558,7 +552,6 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
     np.savez_compressed(
         data_path,
         name=model.name,
-        chi=np.int8(task.chi),
         flux_min=task.flux_min,
         flux_max=task.flux_max,
         q_max=task.q_max,
@@ -598,10 +591,10 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
         linewidths=0.0,
         antialiaseds=True,
     )
-    signed_bounds = sorted((task.chi * task.flux_min, task.chi * task.flux_max))
-    if signed_bounds[0] != signed_bounds[1]:
-        padding = 0.01 * (signed_bounds[1] - signed_bounds[0])
-        axes.set_xlim(signed_bounds[0] - padding, signed_bounds[1] + padding)
+    flux_bounds = [task.flux_min, task.flux_max]
+    if flux_bounds[0] != flux_bounds[1]:
+        padding = 0.01 * (flux_bounds[1] - flux_bounds[0])
+        axes.set_xlim(flux_bounds[0] - padding, flux_bounds[1] + padding)
     axes.set_xlabel(r"$\Phi/\Phi_0$")
     axes.set_ylabel(r"$E$")
     axes.set_title(f"{model.name}: Hofstadter spectrum")
@@ -637,10 +630,9 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
             antialiaseds=True,
         )
         figure.colorbar(points, ax=axes, label=r"Gap size $\Delta E$")
-    signed_bounds = sorted((task.chi * task.flux_min, task.chi * task.flux_max))
-    if signed_bounds[0] != signed_bounds[1]:
-        padding = 0.01 * (signed_bounds[1] - signed_bounds[0])
-        axes.set_xlim(signed_bounds[0] - padding, signed_bounds[1] + padding)
+    if flux_bounds[0] != flux_bounds[1]:
+        padding = 0.01 * (flux_bounds[1] - flux_bounds[0])
+        axes.set_xlim(flux_bounds[0] - padding, flux_bounds[1] + padding)
     axes.set_ylim(0.0, float(model.n_orbitals))
     axes.set_xlabel(r"$\Phi/\Phi_0$")
     axes.set_ylabel(r"$n$ per primitive cell")
@@ -650,15 +642,12 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
     figure.clear()
 
     interactive_path = _FIGURE_DIR / f"{stem}_interactive.html"
-    signed_bounds = sorted((task.chi * task.flux_min, task.chi * task.flux_max))
-    if signed_bounds[0] == signed_bounds[1]:
-        flux_padding = 0.01 * max(1.0, abs(signed_bounds[0]))
-        signed_bounds = [
-            signed_bounds[0] - flux_padding,
-            signed_bounds[1] + flux_padding,
+    if flux_bounds[0] == flux_bounds[1]:
+        flux_padding = 0.01 * max(1.0, abs(flux_bounds[0]))
+        flux_bounds = [
+            flux_bounds[0] - flux_padding,
+            flux_bounds[1] + flux_padding,
         ]
-    if task.chi < 0:
-        interactive_groups.reverse()
     interactive_energy_min = float(energy_data.min())
     interactive_energy_max = float(energy_data.max())
     energy_padding = 0.025 * max(
@@ -670,8 +659,8 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
     spectrum_width, spectrum_height, spectrum_mask = _packed_spectrum_mask(
         flux_data,
         energy_data,
-        signed_bounds[0],
-        signed_bounds[1],
+        flux_bounds[0],
+        flux_bounds[1],
         interactive_energy_min,
         interactive_energy_max,
     )
@@ -679,9 +668,8 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
         interactive_path,
         name=model.name,
         n_orbitals=model.n_orbitals,
-        chi=task.chi,
-        flux_min=signed_bounds[0],
-        flux_max=signed_bounds[1],
+        flux_min=flux_bounds[0],
+        flux_max=flux_bounds[1],
         energy_min=interactive_energy_min,
         energy_max=interactive_energy_max,
         spectrum_width=spectrum_width,

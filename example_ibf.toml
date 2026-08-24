@@ -85,10 +85,9 @@ mode = "spectrum"
 
 [hofstadter.band]
 
-# Phi/Phi0 = chi*p/q
+# Phi/Phi0 = p/q; p may be negative and q must be positive.
 p = 1
 q = 7
-chi = 1
 
 # k = k1*P1 + k2*P2, where P1 = b1/q and P2 = b2
 k_path = '''
@@ -102,8 +101,8 @@ n_k = 80
 
 [hofstadter.spectrum]
 
-chi = 1
-flux_min = 0.0
+# A signed interval includes both magnetic-field directions in one run.
+flux_min = -1.0
 flux_max = 1.0
 
 # Fast preview. For a final figure, increase q_max to 67 and the minimum

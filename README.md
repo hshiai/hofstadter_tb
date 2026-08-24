@@ -152,17 +152,18 @@ The active calculation is selected by
 mode = "band"       # or "spectrum"
 ```
 
-The sign convention for the flux is controlled by `chi = +1` or `-1`.
+For a single magnetic-band calculation, use a signed integer `p` and a positive
+integer `q`. A spectrum calculation uses the signed interval from `flux_min`
+to `flux_max`.
 
 ### Magnetic bands at one rational flux
 
-For $\Phi/\Phi_0=\chi p/q$, use
+For $\Phi/\Phi_0=p/q$, use
 
 ```toml
 [hofstadter.band]
 p = 1
 q = 7
-chi = 1
 
 # k = k1*P1 + k2*P2, with P1 = b1/q and P2 = b2
 k_path = '''
@@ -174,7 +175,9 @@ k_path = '''
 n_k = 80
 ```
 
-The integers `p` and `q` must be coprime. Set `mode = "band"`, then run
+The integer `p` may be positive, zero, or negative, while `q` must be positive;
+`abs(p)` and `q` must be coprime. Use `p = -1` for flux $-1/q$. Set
+`mode = "band"`, then run
 
 ```bash
 python3 hofstadter.py model.toml
@@ -189,8 +192,7 @@ Set `mode = "spectrum"` and specify
 
 ```toml
 [hofstadter.spectrum]
-chi = 1
-flux_min = 0.0
+flux_min = -0.3
 flux_max = 0.3
 q_max = 67
 k_mesh = [6, 6]
@@ -200,9 +202,10 @@ k_mesh = [6, 6]
 k_mesh_q1 = [20, 20]
 ```
 
-The program evaluates every reduced fraction `p/q` in the requested interval
-with `q <= q_max`. The momentum mesh covers the spectrally distinct magnetic
-Brillouin zone,
+The program evaluates every signed reduced fraction `p/q` in the requested
+interval with `q <= q_max`, keeping `p` signed and `q` positive. Thus a single
+run with `flux_min = -1.0` and `flux_max = 1.0` covers both field directions.
+The momentum mesh covers the spectrally distinct magnetic Brillouin zone,
 
 ```text
 k1 in [0, 1),    k2 in [0, 1/q).
@@ -216,10 +219,10 @@ python3 hofstadter.py model.toml
 
 This produces
 
-- `data/<name>_..._spectrum.npz`: numerical spectrum and gap data
-- `figure/<name>_..._spectrum.png`: Hofstadter spectrum
-- `figure/<name>_..._wannier.png`: Wannier diagram
-- `figure/<name>_..._interactive.html`: linked interactive figure
+- `data/<name>_hofstadter_flux..._spectrum.npz`: numerical spectrum and gap data
+- `figure/<name>_hofstadter_flux..._spectrum.png`: Hofstadter spectrum
+- `figure/<name>_hofstadter_flux..._wannier.png`: Wannier diagram
+- `figure/<name>_hofstadter_flux..._interactive.html`: linked interactive figure
 
 Open the HTML file in a web browser. Clicking a spectral gap highlights the
 corresponding point $(\Phi/\Phi_0,n=r/q)$ in the Wannier diagram; clicking a

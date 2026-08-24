@@ -15,7 +15,6 @@ def save_linked_figure(
     *,
     name: str,
     n_orbitals: int,
-    chi: int,
     flux_min: float,
     flux_max: float,
     energy_min: float,
@@ -32,7 +31,6 @@ def save_linked_figure(
         {
             "name": name,
             "nOrbitals": n_orbitals,
-            "chi": chi,
             "fluxMin": flux_min,
             "fluxMax": flux_max,
             "energyMin": energy_min,
@@ -242,7 +240,7 @@ def _fragment(payload: str) -> str:
     return {{
       p: raw[0],
       q: raw[1],
-      flux: payload.chi * raw[0] / raw[1],
+      flux: raw[0] / raw[1],
       gaps,
     }};
   }});
@@ -462,7 +460,7 @@ def _fragment(payload: str) -> str:
     const group = groups[selected.groupIndex];
     const size = selected.upper - selected.lower;
     const middle = 0.5 * (selected.lower + selected.upper);
-    detail.textContent = `Selected gap: Φ/Φ₀ = ${{payload.chi * group.p}}/${{group.q}} = ${{format(group.flux)}} · r = ${{selected.r}} · n = ${{format(selected.r / group.q)}} · ΔE = ${{format(size)}} · E_mid = ${{format(middle)}}`;
+    detail.textContent = `Selected gap: Φ/Φ₀ = ${{group.p}}/${{group.q}} = ${{format(group.flux)}} · r = ${{selected.r}} · n = ${{format(selected.r / group.q)}} · ΔE = ${{format(size)}} · E_mid = ${{format(middle)}}`;
   }}
 
   function selectGap(gap) {{
@@ -477,7 +475,7 @@ def _fragment(payload: str) -> str:
     const gap = gapNearEvent(event, panel);
     if (!gap) {{ tooltip.style.visibility = "hidden"; return; }}
     const group = groups[gap.groupIndex];
-    tooltip.textContent = `${{payload.chi * group.p}}/${{group.q}} · n=${{format(gap.r / group.q)}} · ΔE=${{format(gap.upper - gap.lower)}}`;
+    tooltip.textContent = `${{group.p}}/${{group.q}} · n=${{format(gap.r / group.q)}} · ΔE=${{format(gap.upper - gap.lower)}}`;
     tooltip.style.visibility = "visible";
     const parent = tooltip.parentElement.getBoundingClientRect();
     const canvas = panel === "spectrum" ? spectrumCanvas : wannierCanvas;

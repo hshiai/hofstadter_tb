@@ -37,15 +37,14 @@ n_k = 100
 [hofstadter]
 
 # Choose "band" or "spectrum".
-mode = "spectrum"
+mode = "band"
 
 
 [hofstadter.band]
 
-# Phi/Phi0 = chi*p/q
+# Phi/Phi0 = p/q; p may be negative and q must be positive.
 p = 1
 q = 7
-chi = 1
 
 # k = k1*P1 + k2*P2, where P1 = b1/q and P2 = b2
 k_path = '''
@@ -59,8 +58,7 @@ n_k = 80
 
 [hofstadter.spectrum]
 
-chi = 1
-flux_min = 0.0
+flux_min = -0.1
 flux_max = 1.0
 q_max = 67
 

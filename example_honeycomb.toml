@@ -62,10 +62,9 @@ mode = "spectrum"
 
 [hofstadter.band]
 
-# Phi/Phi0 = chi*p/q
+# Phi/Phi0 = p/q; p may be negative and q must be positive.
 p = 1
 q = 7
-chi = 1
 
 # k = k1*P1 + k2*P2, where P1 = b1/q and P2 = b2
 # k1  k2
@@ -81,9 +80,8 @@ n_k = 80
 
 [hofstadter.spectrum]
 
-# Scan all reduced p/q in this interval with q <= q_max.
+# Scan all signed reduced fluxes in this interval with q <= q_max.
 # This mode saves both the energy spectrum and the density-flux Wannier diagram.
-chi = 1
 flux_min = 0.0
 flux_max = 1.0
 q_max = 61
