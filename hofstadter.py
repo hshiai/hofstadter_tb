@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 from dataclasses import dataclass
 from fractions import Fraction
-from math import gcd
+from math import ceil, gcd, sqrt
 from pathlib import Path
 import tomllib
 from typing import Final
@@ -14,13 +14,12 @@ import numpy as np
 from numpy.typing import NDArray
 
 from interactive import save_linked_figure
-from model import Model, load_model
+from model import Model, load_model, model_path_from_command_line
 
 
 FloatArray = NDArray[np.float64]
 ComplexArray = NDArray[np.complex128]
 _TWO_PI: Final = 2.0 * np.pi
-_LOCAL_INPUT: Final = Path(__file__).with_name("model.toml")
 _FIGURE_DIR: Final = Path(__file__).with_name("figure")
 _DATA_DIR: Final = Path(__file__).with_name("data")
 _DPI: Final = 220
@@ -42,6 +41,7 @@ class SpectrumTask:
     flux_max: float
     q_max: int
     k_mesh: tuple[int, int]
+    k_mesh_q1: tuple[int, int] | None
 
 
 def _integer(table: dict[str, object], key: str, minimum: int) -> int:
@@ -111,10 +111,10 @@ def _parse_path(text: object) -> FloatArray:
     return np.asarray(vertices, dtype=np.float64)
 
 
-def load_hofstadter_task() -> BandTask | SpectrumTask:
-    """Read the active ``[hofstadter]`` task from ``model.toml``."""
+def load_hofstadter_task(path: Path) -> BandTask | SpectrumTask:
+    """Read the active ``[hofstadter]`` task from a model file."""
 
-    with _LOCAL_INPUT.open("rb") as stream:
+    with path.open("rb") as stream:
         data = tomllib.load(stream)
     root = data.get("hofstadter")
     if not isinstance(root, dict):
@@ -153,12 +153,30 @@ def load_hofstadter_task() -> BandTask | SpectrumTask:
             )
         ):
             raise ValueError("'k_mesh' must contain two positive integers.")
+
+        mesh_q1 = table.get("k_mesh_q1")
+        if mesh_q1 is not None:
+            if (
+                not isinstance(mesh_q1, list)
+                or len(mesh_q1) != 2
+                or any(
+                    isinstance(value, bool)
+                    or not isinstance(value, int)
+                    or value < mesh[index]
+                    for index, value in enumerate(mesh_q1)
+                )
+            ):
+                raise ValueError(
+                    "'k_mesh_q1' must contain two integers not smaller than "
+                    "the corresponding 'k_mesh' values."
+                )
         return SpectrumTask(
             _direction(table),
             flux_min,
             flux_max,
             _integer(table, "q_max", 1),
             (mesh[0], mesh[1]),
+            None if mesh_q1 is None else (mesh_q1[0], mesh_q1[1]),
         )
 
     raise ValueError("'[hofstadter].mode' must be 'band' or 'spectrum'.")
@@ -325,6 +343,17 @@ def _magnetic_mesh(q: int, shape: tuple[int, int]) -> FloatArray:
     return np.column_stack((mesh1.ravel(), mesh2.ravel()))
 
 
+def _spectrum_mesh(task: SpectrumTask, q: int) -> tuple[int, int]:
+    """Use more momentum points for the broader bands at small q."""
+
+    if task.k_mesh_q1 is None:
+        return task.k_mesh
+    return tuple(
+        max(minimum, ceil(at_q1 / sqrt(q)))
+        for minimum, at_q1 in zip(task.k_mesh, task.k_mesh_q1)
+    )
+
+
 def _plot_imports() -> tuple[object, object]:
     try:
         from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -419,14 +448,17 @@ def _packed_spectrum_mask(
     np.clip(x, 0, width - 1, out=x)
     np.clip(y, 0, height - 1, out=y)
 
-    # A two-pixel mark stays visible when the browser scales the canvas down.
-    x_next = np.minimum(x + 1, width - 1)
-    y_next = np.minimum(y + 1, height - 1)
+    # A small circular mask stays smooth when the browser scales the canvas.
+    x_left = np.maximum(x - 1, 0)
+    x_right = np.minimum(x + 1, width - 1)
+    y_up = np.maximum(y - 1, 0)
+    y_down = np.minimum(y + 1, height - 1)
     mask = np.zeros((height, width), dtype=np.uint8)
     mask[y, x] = 1
-    mask[y, x_next] = 1
-    mask[y_next, x] = 1
-    mask[y_next, x_next] = 1
+    mask[y, x_left] = 1
+    mask[y, x_right] = 1
+    mask[y_up, x] = 1
+    mask[y_down, x] = 1
     packed = np.packbits(mask.ravel(), bitorder="big")
     encoded = base64.b64encode(packed.tobytes()).decode("ascii")
     return width, height, encoded
@@ -464,7 +496,7 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
     interactive_groups = []
 
     for p, q in fractions:
-        k_points = _magnetic_mesh(q, task.k_mesh)
+        k_points = _magnetic_mesh(q, _spectrum_mesh(task, q))
         energies = magnetic_energies(model, p, q, task.chi, k_points)
         n_bands = q * model.n_orbitals
         count = k_points.shape[0] * n_bands
@@ -531,6 +563,10 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
         flux_max=task.flux_max,
         q_max=task.q_max,
         k_mesh=np.asarray(task.k_mesh, dtype=np.int32),
+        k_mesh_q1=np.asarray(
+            () if task.k_mesh_q1 is None else task.k_mesh_q1,
+            dtype=np.int32,
+        ),
         wannier_gap_threshold=gap_tolerance,
         flux=flux_data,
         p=np.concatenate(p_data),
@@ -556,11 +592,11 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
     axes.scatter(
         flux_data,
         energy_data,
-        s=0.25,
+        s=0.45,
         marker="o",
-        color="0.08",
+        color="0.05",
         linewidths=0.0,
-        rasterized=True,
+        antialiaseds=True,
     )
     signed_bounds = sorted((task.chi * task.flux_min, task.chi * task.flux_max))
     if signed_bounds[0] != signed_bounds[1]:
@@ -598,7 +634,7 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
             cmap=gap_colormap,
             norm=gap_norm,
             linewidths=0.0,
-            rasterized=True,
+            antialiaseds=True,
         )
         figure.colorbar(points, ax=axes, label=r"Gap size $\Delta E$")
     signed_bounds = sorted((task.chi * task.flux_min, task.chi * task.flux_max))
@@ -658,8 +694,9 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
 
 
 def main() -> None:
-    model = load_model()
-    task = load_hofstadter_task()
+    input_path = model_path_from_command_line()
+    model = load_model(input_path)
+    task = load_hofstadter_task(input_path)
     if isinstance(task, BandTask):
         output_paths = run_band(model, task)
     else:

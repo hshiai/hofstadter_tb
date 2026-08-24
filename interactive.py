@@ -364,7 +364,7 @@ def _fragment(payload: str) -> str:
     spectrumTintContext.drawImage(spectrumMaskCanvas, 0, 0);
     spectrumTintContext.globalCompositeOperation = "source-over";
     context.save();
-    context.imageSmoothingEnabled = false;
+    context.imageSmoothingEnabled = true;
     context.drawImage(
       spectrumTintCanvas,
       geom.pad.left,
@@ -404,7 +404,9 @@ def _fragment(payload: str) -> str:
       const x = xPixel(group.flux, geom);
       const y = yPixel(gap.r / group.q, 0, payload.nOrbitals, geom);
       context.globalAlpha = Math.max(0.035, Math.sqrt((gap.upper - gap.lower) / gapMax));
-      context.fillRect(x - 1, y - 1, 2, 2);
+      context.beginPath();
+      context.arc(x, y, 1.25, 0, 2 * Math.PI);
+      context.fill();
     }});
     context.restore();
     if (selected) {{

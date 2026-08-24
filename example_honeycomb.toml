@@ -83,5 +83,6 @@ flux_min = 0.0
 flux_max = 0.3
 q_max = 67
 
-# Uniform mesh over the spectrally distinct part of the mBZ.
+# Minimum mesh for large q. Small q uses the denser adaptive mesh below.
 k_mesh = [6, 6]
+k_mesh_q1 = [20, 20]

@@ -9,20 +9,19 @@ from typing import Final
 import numpy as np
 from numpy.typing import NDArray
 
-from model import Model, load_model
+from model import Model, load_model, model_path_from_command_line
 
 
 FloatArray = NDArray[np.float64]
 ComplexArray = NDArray[np.complex128]
 _TWO_PI: Final = 2.0 * np.pi
-_LOCAL_INPUT: Final = Path(__file__).with_name("model.toml")
 _FIGURE_DIR: Final = Path(__file__).with_name("figure")
 _DATA_DIR: Final = Path(__file__).with_name("data")
 _DPI: Final = 220
 
 
-def _load_band_path() -> tuple[list[str], FloatArray, int]:
-    with _LOCAL_INPUT.open("rb") as stream:
+def _load_band_path(path: Path) -> tuple[list[str], FloatArray, int]:
+    with path.open("rb") as stream:
         data = tomllib.load(stream)
 
     text = data.get("band_path")
@@ -176,8 +175,9 @@ def _plot_bands(
 
 
 def main() -> None:
-    model = load_model()
-    labels, vertices, n_k = _load_band_path()
+    input_path = model_path_from_command_line()
+    model = load_model(input_path)
+    labels, vertices, n_k = _load_band_path(input_path)
     k_points, distance, tick_positions = _sample_path(vertices, model, n_k)
     energies = np.linalg.eigvalsh(bloch_hamiltonian(model, k_points))
     data_path = _save_data(model, labels, vertices, distance, k_points, energies)

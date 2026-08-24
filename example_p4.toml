@@ -1,0 +1,116 @@
+name = "p4"
+
+a1 = [1.0, 0.0]
+a2 = [0.0, 1.0]
+
+# Orbital indices: 0 = a, 1 = c_x, 2 = c_y, 3 = b_+, 4 = b_0.
+# tau[alpha] = [xi_1^alpha, xi_2^alpha].
+tau = [
+  [0.0, 0.0],
+  [0.5, 0.0],
+  [0.0, 0.5],
+  [0.5, 0.5],
+  [0.5, 0.5],
+]
+
+# h(alpha1, alpha2, ell): alpha2 -> alpha1
+# j  alpha1  alpha2  ell1  ell2  Re(t)  Im(t)
+hopping = '''
+# a <-> b_+
+0    0   3    0   0    1.0   0.0
+1    3   0    0   0    1.0   0.0
+2    0   3    1   0    0.0   1.0
+3    3   0   -1   0    0.0  -1.0
+4    0   3    0   1    0.0  -1.0
+5    3   0    0  -1    0.0   1.0
+6    0   3    1   1   -1.0   0.0
+7    3   0   -1  -1   -1.0   0.0
+
+# a <-> b_0
+8    0   4    0   0    1.0   0.0
+9    4   0    0   0    1.0   0.0
+10   0   4    1   0    1.0   0.0
+11   4   0   -1   0    1.0   0.0
+12   0   4    0   1    1.0   0.0
+13   4   0    0  -1    1.0   0.0
+14   0   4    1   1    1.0   0.0
+15   4   0   -1  -1    1.0   0.0
+
+# c_x <-> b_+
+16   1   3    0   0    1.0   0.0
+17   3   1    0   0    1.0   0.0
+18   1   3    0   1    1.0   0.0
+19   3   1    0  -1    1.0   0.0
+
+# c_x <-> b_0
+20   1   4    0   0    1.0   0.0
+21   4   1    0   0    1.0   0.0
+22   1   4    0   1   -1.0   0.0
+23   4   1    0  -1   -1.0   0.0
+
+# c_y <-> b_+
+24   2   3    0   0    0.0  -1.0
+25   3   2    0   0    0.0   1.0
+26   2   3    1   0    0.0  -1.0
+27   3   2   -1   0    0.0   1.0
+
+# c_y <-> b_0
+28   2   4    0   0    1.0   0.0
+29   4   2    0   0    1.0   0.0
+30   2   4    1   0   -1.0   0.0
+31   4   2   -1   0   -1.0   0.0
+
+# Onsite energy -Delta on b_+ and b_0, with Delta = 5.
+32   3   3    0   0   -5.0   0.0
+33   4   4    0   0   -5.0   0.0
+'''
+
+# k = k1*b1 + k2*b2
+# label  k1  k2
+band_path = '''
+G   0.0   0.0
+X   0.5   0.0
+M   0.5   0.5
+G   0.0   0.0
+'''
+
+n_k = 100
+
+
+[hofstadter]
+
+# Choose "band" or "spectrum".
+mode = "spectrum"
+
+
+[hofstadter.band]
+
+# Phi/Phi0 = chi*p/q
+p = 1
+q = 7
+chi = 1
+
+# k = k1*P1 + k2*P2, where P1 = b1/q and P2 = b2
+k_path = '''
+0.2  0.0
+0.2  1.0
+1.0  1.0
+'''
+
+n_k = 80
+
+
+[hofstadter.spectrum]
+
+chi = 1
+flux_min = 0.0
+flux_max = 1.0
+
+# Fast preview. For a final figure, increase q_max to 67 and the minimum
+# k_mesh to [6, 6].
+q_max = 35
+k_mesh = [4, 4]
+
+# Optional adaptive sampling: use 20 x 20 points at q = 1 and decrease as
+# 1/sqrt(q), never going below k_mesh.
+k_mesh_q1 = [20, 20]

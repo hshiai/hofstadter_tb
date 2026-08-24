@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import sys
 import tomllib
 from typing import Final
 
@@ -237,14 +238,23 @@ def _load_model(path: Path) -> Model:
     )
 
 
-def load_model() -> Model:
-    """Load the local ``model.toml`` file."""
+def load_model(path: str | Path | None = None) -> Model:
+    """Load a model file, defaulting to the local ``model.toml``."""
 
-    return _load_model(_LOCAL_INPUT)
+    return _load_model(_LOCAL_INPUT if path is None else Path(path))
+
+
+def model_path_from_command_line() -> Path:
+    """Read the optional model-file path from the command line."""
+
+    arguments = sys.argv[1:]
+    if len(arguments) > 1:
+        raise SystemExit(f"Usage: python3 {Path(sys.argv[0]).name} [MODEL.toml]")
+    return Path(arguments[0]).expanduser() if arguments else _LOCAL_INPUT
 
 
 def main() -> None:
-    model = load_model()
+    model = load_model(model_path_from_command_line())
     print(f"name  = {model.name}")
     print(f"N_orb = {model.n_orbitals}")
     print(f"N_hop = {model.n_hoppings}")

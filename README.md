@@ -31,14 +31,23 @@ python3 -m pip install numpy matplotlib
 
 ## Quick start
 
-All user input is stored in `model.toml`. Run the commands from this directory:
+Each model is stored in a TOML file. Run the commands from this directory:
 
 ```bash
 cd hofstadter_tb
 ```
 
-The included `model.toml` is a graphene example with a sublattice mass and
-next-nearest-neighbor hopping.
+The repository includes square, triangular, honeycomb, QWZ, topological
+flat-band, and $p4$ example inputs. Pass the desired TOML file to any command:
+
+```bash
+python3 model.py example_triangular.toml
+python3 band.py example_triangular.toml
+python3 hofstadter.py example_triangular.toml
+```
+
+If the file name is omitted, the programs read a local `model.toml` if one is
+provided by the user.
 
 ### 1. Define the lattice and hopping model
 
@@ -97,7 +106,7 @@ Invalid or duplicate hopping channels are rejected before any calculation.
 ### 2. Plot the lattice and Brillouin zone
 
 ```bash
-python3 model.py
+python3 model.py model.toml
 ```
 
 This saves two figures in `figure/`:
@@ -127,7 +136,7 @@ n_k = 100
 Then run
 
 ```bash
-python3 band.py
+python3 band.py model.toml
 ```
 
 The numerical bands are saved in `data/<name>_band.dat`, and the plot is saved
@@ -167,7 +176,7 @@ n_k = 80
 The integers `p` and `q` must be coprime. Set `mode = "band"`, then run
 
 ```bash
-python3 hofstadter.py
+python3 hofstadter.py model.toml
 ```
 
 The band data are written to `data/`, and the magnetic-band plot is written to
@@ -184,6 +193,10 @@ flux_min = 0.0
 flux_max = 0.3
 q_max = 67
 k_mesh = [6, 6]
+
+# Optional: denser sampling for the broader small-q bands.  The mesh decreases
+# as 1/sqrt(q) and never goes below k_mesh.
+k_mesh_q1 = [20, 20]
 ```
 
 The program evaluates every reduced fraction `p/q` in the requested interval
@@ -197,7 +210,7 @@ k1 in [0, 1),    k2 in [0, 1/q).
 Run
 
 ```bash
-python3 hofstadter.py
+python3 hofstadter.py model.toml
 ```
 
 This produces
@@ -223,6 +236,9 @@ white corresponding to zero and darker blue corresponding to a larger gap.
 ## Accuracy and performance
 
 - Increase `k_mesh` to obtain more reliable band edges and gap sizes.
+- If `k_mesh_q1` is given, the spectrum uses
+  `max(k_mesh, ceil(k_mesh_q1/sqrt(q)))` in each momentum direction.  Omitting
+  it keeps the fixed `k_mesh` behavior used by older input files.
 - Increase `q_max` for a denser Hofstadter spectrum.
 - The magnetic Hamiltonian dimension is `q * N_orb`, so large denominators are
   more expensive.

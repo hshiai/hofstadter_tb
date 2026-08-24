@@ -1,0 +1,120 @@
+name = "top2"
+
+a1 = [1.0, 0.0]
+a2 = [0.0, 1.0]
+
+# tau[alpha] = [xi_1^alpha, xi_2^alpha]
+tau = [
+  [0.0, 0.0],
+  [0.0, 0.0],
+]
+
+# alpha1, alpha2 = 0, ..., N_orb - 1
+# h(alpha1, alpha2, ell): alpha2 -> alpha1
+# j  alpha1  alpha2  ell1  ell2  Re(t)  Im(t)
+hopping = '''
+0   0   0   0   0   5.0   0.0
+1   1   1   0   0   1.0   0.0
+
+2   0   0   1   0  -2.0   0.0
+3   0   1   1   0   0.0  -1.0
+4   1   0   1   0   0.0  -1.0
+5   0   0  -1   0  -2.0   0.0
+6   1   0  -1   0   0.0   1.0
+7   0   1  -1   0   0.0   1.0
+
+8   0   0   0   1  -2.0   0.0
+9   0   1   0   1   1.0   0.0
+10  1   0   0   1  -1.0   0.0
+11  0   0   0  -1  -2.0   0.0
+12  1   0   0  -1   1.0   0.0
+13  0   1   0  -1  -1.0   0.0
+
+14  0   0   2   0   0.25  0.0
+15  0   1   2   0   0.0   0.25
+16  1   0   2   0   0.0   0.25
+17  1   1   2   0  -0.25   0.0
+
+18  0   0  -2   0   0.25  0.0
+19  1   0  -2   0   0.0  -0.25
+20  0   1  -2   0   0.0  -0.25
+21  1   1  -2   0  -0.25   0.0
+
+22  0   0   0   2   0.25  0.0
+23  0   1   0   2  -0.25  0.0
+24  1   0   0   2   0.25  0.0
+25  1   1   0   2  -0.25  0.0
+
+26  0   0   0  -2   0.25  0.0
+27  1   0   0  -2  -0.25  0.0
+28  0   1   0  -2   0.25  0.0
+29  1   1   0  -2  -0.25  0.0
+
+30  0   0   1   1   0.5   0.0
+31  0   1   1   1  -0.25  0.25
+32  1   0   1   1   0.25  0.25
+
+33  0   0  -1  -1   0.5   0.0
+34  1   0  -1  -1  -0.25 -0.25
+35  0   1  -1  -1   0.25 -0.25
+
+36  0   0   1  -1   0.5   0.0
+37  0   1   1  -1   0.25  0.25
+38  1   0   1  -1  -0.25  0.25
+
+39  0   0  -1   1   0.5   0.0
+40  1   0  -1   1   0.25 -0.25
+41  0   1  -1   1  -0.25 -0.25
+'''
+
+# k = k1*b1 + k2*b2
+# label  k1  k2
+band_path = '''
+G   0.0                 0.0
+X   0.5                 0.0
+M   0.5                 0.5
+G   0.0                 0.0
+'''
+
+# Number of k points on each path segment, including both ends.
+n_k = 100
+
+
+[hofstadter]
+
+# Choose "band" or "spectrum". The linked spectrum/Wannier figure is
+# generated only in "spectrum" mode.
+mode = "spectrum"
+
+
+[hofstadter.band]
+
+# Phi/Phi0 = chi*p/q
+p = 1
+q = 7
+chi = 1
+
+# k = k1*P1 + k2*P2, where P1 = b1/q and P2 = b2
+# k1  k2
+k_path = '''
+0.2  0.0
+0.2  1.0
+1.0  1.0
+'''
+
+# Number of k points on each path segment, including both ends.
+n_k = 80
+
+
+[hofstadter.spectrum]
+
+# Scan all reduced p/q in this interval with q <= q_max.
+# This mode saves both the energy spectrum and the density-flux Wannier diagram.
+chi = 1
+flux_min = 0.0
+flux_max = 1.0
+q_max = 67
+
+# Minimum mesh for large q. Small q uses the denser adaptive mesh below.
+k_mesh = [6, 6]
+k_mesh_q1 = [20, 20]

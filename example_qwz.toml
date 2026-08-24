@@ -1,0 +1,93 @@
+name = "qwz"
+
+a1 = [1.0, 0.0]
+a2 = [0.0, 1.0]
+
+# Two co-centered orbitals.
+# tau[alpha] = [xi_1^alpha, xi_2^alpha].
+tau = [
+  [0.0, 0.0],
+  [0.0, 0.0],
+]
+
+# Half-BHZ/QWZ parameters used in the article: A = B = M = 1.
+# h(alpha1, alpha2, ell): alpha2 -> alpha1
+# j  alpha1  alpha2  ell1  ell2  Re(t)  Im(t)
+hopping = '''
+# Onsite term: M sigma_z
+0    0   0    0   0    1.0   0.0
+1    1   1    0   0   -1.0   0.0
+
+# +a1 hopping: (i/2) sigma_x - (1/2) sigma_z
+2    0   0    1   0   -0.5   0.0
+3    0   1    1   0    0.0   0.5
+4    1   0    1   0    0.0   0.5
+5    1   1    1   0    0.5   0.0
+
+# -a1 Hermitian partners
+6    0   0   -1   0   -0.5   0.0
+7    1   0   -1   0    0.0  -0.5
+8    0   1   -1   0    0.0  -0.5
+9    1   1   -1   0    0.5   0.0
+
+# +a2 hopping: (i/2) sigma_y - (1/2) sigma_z
+10   0   0    0   1   -0.5   0.0
+11   0   1    0   1    0.5   0.0
+12   1   0    0   1   -0.5   0.0
+13   1   1    0   1    0.5   0.0
+
+# -a2 Hermitian partners
+14   0   0    0  -1   -0.5   0.0
+15   1   0    0  -1    0.5   0.0
+16   0   1    0  -1   -0.5   0.0
+17   1   1    0  -1    0.5   0.0
+'''
+
+# k = k1*b1 + k2*b2
+# label  k1  k2
+band_path = '''
+G   0.0   0.0
+X   0.5   0.0
+M   0.5   0.5
+G   0.0   0.0
+'''
+
+n_k = 100
+
+
+[hofstadter]
+
+# Choose "band" or "spectrum".
+mode = "spectrum"
+
+
+[hofstadter.band]
+
+# Phi/Phi0 = chi*p/q
+p = 1
+q = 7
+chi = 1
+
+# k = k1*P1 + k2*P2, where P1 = b1/q and P2 = b2
+k_path = '''
+0.2  0.0
+0.2  1.0
+1.0  1.0
+'''
+
+n_k = 80
+
+
+[hofstadter.spectrum]
+
+chi = 1
+flux_min = 0.0
+flux_max = 1.0
+
+# Fast preview. For a final figure, increase q_max to 67 and the minimum
+# k_mesh to [6, 6].
+q_max = 45
+k_mesh = [4, 4]
+
+# Use more momentum points for the broader bands at small q.
+k_mesh_q1 = [20, 20]
