@@ -40,6 +40,8 @@ class SpectrumTask:
     q_max: int
     k_mesh: tuple[int, int]
     k_mesh_q1: tuple[int, int] | None
+    energy_window: tuple[float, float] | None = None
+    filling_window: tuple[float, float] | None = None
 
 
 def _integer(
@@ -63,6 +65,29 @@ def _number(table: dict[str, object], key: str) -> float:
     if not np.isfinite(value):
         raise ValueError(f"'{key}' must be a finite real number.")
     return value
+
+
+def _optional_window(
+    table: dict[str, object],
+    lower_key: str,
+    upper_key: str,
+) -> tuple[float, float] | None:
+    """Read an optional pair of finite, strictly ordered bounds."""
+
+    has_lower = lower_key in table
+    has_upper = upper_key in table
+    if has_lower != has_upper:
+        raise ValueError(
+            f"'{lower_key}' and '{upper_key}' must be provided together."
+        )
+    if not has_lower:
+        return None
+
+    lower = _number(table, lower_key)
+    upper = _number(table, upper_key)
+    if upper <= lower:
+        raise ValueError(f"Require {lower_key} < {upper_key}.")
+    return lower, upper
 
 
 def _validate_flux(p: int, q: int) -> None:
@@ -170,6 +195,8 @@ def load_hofstadter_task(path: Path) -> BandTask | SpectrumTask:
             _integer(table, "q_max", 1),
             (mesh[0], mesh[1]),
             None if mesh_q1 is None else (mesh_q1[0], mesh_q1[1]),
+            _optional_window(table, "energy_min", "energy_max"),
+            _optional_window(table, "n_min", "n_max"),
         )
 
     raise ValueError("'[hofstadter].mode' must be 'band' or 'spectrum'.")
@@ -345,6 +372,20 @@ def _spectrum_mesh(task: SpectrumTask, q: int) -> tuple[int, int]:
     )
 
 
+def _integer_ticks(lower: float, upper: float, maximum: int = 7) -> FloatArray:
+    """Return at most ``maximum`` integer ticks inside a closed interval."""
+
+    first = ceil(lower)
+    last = int(np.floor(upper))
+    if first > last:
+        return np.empty(0, dtype=np.float64)
+    step = max(1, ceil((last - first) / max(1, maximum - 1)))
+    ticks = np.arange(first, last + 1, step, dtype=np.float64)
+    if ticks[-1] != last and ticks.size < maximum:
+        ticks = np.append(ticks, float(last))
+    return ticks
+
+
 def _plot_imports() -> tuple[object, object]:
     try:
         from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -458,6 +499,14 @@ def _packed_spectrum_mask(
 def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Path]:
     """Calculate the spectrum and its density-flux Wannier diagram."""
 
+    if task.filling_window is not None:
+        n_min, n_max = task.filling_window
+        if n_min < 0.0 or n_max > model.n_orbitals:
+            raise ValueError(
+                "Require 0 <= n_min < n_max <= N_orb "
+                f"(N_orb = {model.n_orbitals})."
+            )
+
     fractions = rational_fluxes(
         task.flux_min,
         task.flux_max,
@@ -560,6 +609,14 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
             () if task.k_mesh_q1 is None else task.k_mesh_q1,
             dtype=np.int32,
         ),
+        energy_window=np.asarray(
+            () if task.energy_window is None else task.energy_window,
+            dtype=np.float64,
+        ),
+        filling_window=np.asarray(
+            () if task.filling_window is None else task.filling_window,
+            dtype=np.float64,
+        ),
         wannier_gap_threshold=gap_tolerance,
         flux=flux_data,
         p=np.concatenate(p_data),
@@ -582,9 +639,17 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
     figure = Figure(figsize=(6.0, 5.0), layout="constrained")
     FigureCanvasAgg(figure)
     axes = figure.subplots()
+    spectrum_visible = (
+        np.ones(energy_data.size, dtype=bool)
+        if task.energy_window is None
+        else (
+            (energy_data >= task.energy_window[0])
+            & (energy_data <= task.energy_window[1])
+        )
+    )
     axes.scatter(
-        flux_data,
-        energy_data,
+        flux_data[spectrum_visible],
+        energy_data[spectrum_visible],
         s=0.35,
         marker="o",
         color="0.05",
@@ -599,6 +664,8 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
     axes.set_ylabel(r"$E$")
     axes.set_title(f"{model.name}: Hofstadter spectrum")
     axes.margins(x=0.01, y=0.03)
+    if task.energy_window is not None:
+        axes.set_ylim(*task.energy_window)
     figure.savefig(spectrum_path, dpi=_DPI)
     figure.clear()
 
@@ -606,9 +673,19 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
     figure = Figure(figsize=(6.0, 5.0), layout="constrained")
     FigureCanvasAgg(figure)
     axes = figure.subplots()
-    if wannier_gap.size:
+    n_bounds = (
+        (0.0, float(model.n_orbitals))
+        if task.filling_window is None
+        else task.filling_window
+    )
+    wannier_visible = (
+        (wannier_density >= n_bounds[0])
+        & (wannier_density <= n_bounds[1])
+    )
+    if np.any(wannier_visible):
         from matplotlib.colors import LinearSegmentedColormap, PowerNorm
 
+        visible_gap = wannier_gap[wannier_visible]
         gap_colormap = LinearSegmentedColormap.from_list(
             "gap_size",
             ("#ffffff", "#1769aa"),
@@ -616,12 +693,12 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
         gap_norm = PowerNorm(
             gamma=0.5,
             vmin=0.0,
-            vmax=float(wannier_gap.max()),
+            vmax=float(visible_gap.max()),
         )
         points = axes.scatter(
-            wannier_flux,
-            wannier_density,
-            c=wannier_gap,
+            wannier_flux[wannier_visible],
+            wannier_density[wannier_visible],
+            c=visible_gap,
             s=1.0,
             marker="o",
             cmap=gap_colormap,
@@ -633,7 +710,8 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
     if flux_bounds[0] != flux_bounds[1]:
         padding = 0.01 * (flux_bounds[1] - flux_bounds[0])
         axes.set_xlim(flux_bounds[0] - padding, flux_bounds[1] + padding)
-    axes.set_ylim(0.0, float(model.n_orbitals))
+    axes.set_ylim(*n_bounds)
+    axes.set_yticks(_integer_ticks(*n_bounds))
     axes.set_xlabel(r"$\Phi/\Phi_0$")
     axes.set_ylabel(r"$n$ per primitive cell")
     axes.set_title(f"{model.name}: Wannier diagram")
@@ -648,26 +726,50 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
             flux_bounds[0] - flux_padding,
             flux_bounds[1] + flux_padding,
         ]
-    interactive_energy_min = float(energy_data.min())
-    interactive_energy_max = float(energy_data.max())
-    energy_padding = 0.025 * max(
-        1e-12,
-        interactive_energy_max - interactive_energy_min,
+    if task.energy_window is None:
+        interactive_energy_min = float(energy_data.min())
+        interactive_energy_max = float(energy_data.max())
+        energy_padding = 0.025 * max(
+            1e-12,
+            interactive_energy_max - interactive_energy_min,
+        )
+        interactive_energy_min -= energy_padding
+        interactive_energy_max += energy_padding
+    else:
+        interactive_energy_min, interactive_energy_max = task.energy_window
+
+    visible_energy = (
+        (energy_data >= interactive_energy_min)
+        & (energy_data <= interactive_energy_max)
     )
-    interactive_energy_min -= energy_padding
-    interactive_energy_max += energy_padding
     spectrum_width, spectrum_height, spectrum_mask = _packed_spectrum_mask(
-        flux_data,
-        energy_data,
+        flux_data[visible_energy],
+        energy_data[visible_energy],
         flux_bounds[0],
         flux_bounds[1],
         interactive_energy_min,
         interactive_energy_max,
     )
+
+    interactive_groups_visible = []
+    for p, q, flat_gaps in interactive_groups:
+        visible_gaps = []
+        for index in range(0, len(flat_gaps), 3):
+            filled, lower, upper = flat_gaps[index : index + 3]
+            density = filled / q
+            if not n_bounds[0] <= density <= n_bounds[1]:
+                continue
+            if upper < interactive_energy_min or lower > interactive_energy_max:
+                continue
+            visible_gaps.extend((filled, lower, upper))
+        interactive_groups_visible.append([p, q, visible_gaps])
+
     save_linked_figure(
         interactive_path,
         name=model.name,
         n_orbitals=model.n_orbitals,
+        n_min=n_bounds[0],
+        n_max=n_bounds[1],
         flux_min=flux_bounds[0],
         flux_max=flux_bounds[1],
         energy_min=interactive_energy_min,
@@ -676,7 +778,7 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
         spectrum_height=spectrum_height,
         spectrum_mask=spectrum_mask,
         gap_threshold=gap_tolerance,
-        groups=interactive_groups,
+        groups=interactive_groups_visible,
     )
     return data_path, spectrum_path, wannier_path, interactive_path
 

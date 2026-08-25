@@ -200,11 +200,22 @@ k_mesh = [6, 6]
 # Optional: denser sampling for the broader small-q bands.  The mesh decreases
 # as 1/sqrt(q) and never goes below k_mesh.
 k_mesh_q1 = [20, 20]
+
+# Optional display windows. Omit either pair to use the full energy or
+# filling range. Both bounds in a pair must be provided together.
+energy_min = -1.0
+energy_max = 1.0
+n_min = 0.5
+n_max = 1.5
 ```
 
 The program evaluates every signed reduced fraction `p/q` in the requested
 interval with `q <= q_max`, keeping `p` signed and `q` positive. Thus a single
 run with `flux_min = -1.0` and `flux_max = 1.0` covers both field directions.
+The optional energy and filling windows control the displayed ranges of the
+static and interactive figures. The compressed NPZ file continues to store the
+complete calculated spectrum and gap data. The Wannier-diagram vertical axis
+shows only integer filling ticks within the selected range.
 The momentum mesh covers the spectrally distinct magnetic Brillouin zone,
 
 ```text

@@ -24,6 +24,8 @@ def save_linked_figure(
     spectrum_mask: str,
     gap_threshold: float,
     groups: list[list[object]],
+    n_min: float = 0.0,
+    n_max: float | None = None,
 ) -> Path:
     """Save linked energy-spectrum and density-flux panels."""
 
@@ -31,6 +33,8 @@ def save_linked_figure(
         {
             "name": name,
             "nOrbitals": n_orbitals,
+            "nMin": n_min,
+            "nMax": n_orbitals if n_max is None else n_max,
             "fluxMin": flux_min,
             "fluxMax": flux_max,
             "energyMin": energy_min,
@@ -292,7 +296,7 @@ def _fragment(payload: str) -> str:
     return geom.pad.top + (maximum - value) / (maximum - minimum) * geom.plotHeight;
   }}
 
-  function drawAxes(context, width, height, yMin, yMax, yLabel) {{
+  function drawAxes(context, width, height, yMin, yMax, yLabel, integerY = false) {{
     const geom = geometry(width, height);
     const color = colors();
     const fontFamily = getComputedStyle(root).fontFamily;
@@ -320,15 +324,24 @@ def _fragment(payload: str) -> str:
     context.fillStyle = color.muted;
     context.textAlign = "right";
     context.textBaseline = "middle";
-    for (let i = 0; i <= 4; i += 1) {{
-      const fraction = i / 4;
-      const y = geom.pad.top + (1 - fraction) * geom.plotHeight;
+    const yTicks = [];
+    if (integerY) {{
+      const first = Math.ceil(yMin);
+      const last = Math.floor(yMax);
+      const step = Math.max(1, Math.ceil((last - first) / 6));
+      for (let value = first; value <= last; value += step) yTicks.push(value);
+      if (yTicks.length && yTicks[yTicks.length - 1] !== last && yTicks.length < 7) yTicks.push(last);
+    }} else {{
+      for (let i = 0; i <= 4; i += 1) yTicks.push(yMin + i / 4 * (yMax - yMin));
+    }}
+    yTicks.forEach(value => {{
+      const y = yPixel(value, yMin, yMax, geom);
       context.beginPath();
       context.moveTo(geom.pad.left - 4, y);
       context.lineTo(geom.pad.left, y);
       context.stroke();
-      context.fillText(format(yMin + fraction * (yMax - yMin)), geom.pad.left - 7, y);
-    }}
+      context.fillText(integerY ? String(value) : format(value), geom.pad.left - 7, y);
+    }});
     context.fillStyle = color.foreground;
     context.save();
     context.translate(13, geom.pad.top + geom.plotHeight / 2);
@@ -393,14 +406,14 @@ def _fragment(payload: str) -> str:
 
   function drawWannier() {{
     const {{ context, width, height }} = canvasState(wannierCanvas);
-    const geom = drawAxes(context, width, height, 0, payload.nOrbitals, "n per cell");
+    const geom = drawAxes(context, width, height, payload.nMin, payload.nMax, "n per cell", true);
     const color = colors();
     context.save();
     context.fillStyle = color.series;
     allGaps.forEach(gap => {{
       const group = groups[gap.groupIndex];
       const x = xPixel(group.flux, geom);
-      const y = yPixel(gap.r / group.q, 0, payload.nOrbitals, geom);
+      const y = yPixel(gap.r / group.q, payload.nMin, payload.nMax, geom);
       context.globalAlpha = Math.max(0.035, Math.sqrt((gap.upper - gap.lower) / gapMax));
       context.beginPath();
       context.arc(x, y, 1.25, 0, 2 * Math.PI);
@@ -410,7 +423,7 @@ def _fragment(payload: str) -> str:
     if (selected) {{
       const group = groups[selected.groupIndex];
       const x = xPixel(group.flux, geom);
-      const y = yPixel(selected.r / group.q, 0, payload.nOrbitals, geom);
+      const y = yPixel(selected.r / group.q, payload.nMin, payload.nMax, geom);
       context.save();
       context.strokeStyle = color.selected;
       context.lineWidth = 2;
@@ -448,7 +461,7 @@ def _fragment(payload: str) -> str:
     if (!group || !group.gaps.length) return null;
     const value = panel === "spectrum"
       ? energyMax - (y - geom.pad.top) / geom.plotHeight * (energyMax - energyMin)
-      : payload.nOrbitals - (y - geom.pad.top) / geom.plotHeight * payload.nOrbitals;
+      : payload.nMax - (y - geom.pad.top) / geom.plotHeight * (payload.nMax - payload.nMin);
     return group.gaps.reduce((best, gap) => {{
       const location = panel === "spectrum" ? 0.5 * (gap.lower + gap.upper) : gap.r / group.q;
       return !best || Math.abs(location - value) < Math.abs((panel === "spectrum" ? 0.5 * (best.lower + best.upper) : best.r / group.q) - value) ? gap : best;
@@ -483,7 +496,7 @@ def _fragment(payload: str) -> str:
     const geom = geometry(rect.width, rect.height);
     const markX = xPixel(group.flux, geom) + rect.left - parent.left;
     const markValue = panel === "spectrum" ? 0.5 * (gap.lower + gap.upper) : gap.r / group.q;
-    const markY = yPixel(markValue, panel === "spectrum" ? energyMin : 0, panel === "spectrum" ? energyMax : payload.nOrbitals, geom) + rect.top - parent.top;
+    const markY = yPixel(markValue, panel === "spectrum" ? energyMin : payload.nMin, panel === "spectrum" ? energyMax : payload.nMax, geom) + rect.top - parent.top;
     const left = Math.max(4, Math.min(parent.width - tooltip.offsetWidth - 4, markX + 8));
     const top = Math.max(4, Math.min(parent.height - tooltip.offsetHeight - 4, markY - tooltip.offsetHeight - 7));
     tooltip.style.left = `${{left}}px`;

@@ -113,3 +113,12 @@ k_mesh = [3, 3]
 # Optional adaptive sampling: use 20 x 20 points at q = 1 and decrease as
 # 1/sqrt(q), never going below k_mesh.
 k_mesh_q1 = [30, 30]
+
+# Energy window
+# energy_min = -0.1
+# energy_max = 2.0
+
+# filling window
+# n_min = 2.5
+# n_max = 5.0
+
