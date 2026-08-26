@@ -83,8 +83,17 @@ Each hopping line contains
 j  alpha1  alpha2  ell1  ell2  Re(t)  Im(t)
 ```
 
-and represents a hopping from orbital `alpha2` in the reference cell to
-orbital `alpha1` in cell `ell1*a1 + ell2*a2`:
+and represents the Wannier90-style matrix element
+
+$$
+h_{\mathtt{alpha1},\mathtt{alpha2}}(\mathbf R)
+=\langle \mathbf 0,\mathtt{alpha1}|H|\mathbf R,\mathtt{alpha2}\rangle,
+\qquad
+\mathbf R=\mathtt{ell1}\,\mathbf a_1+\mathtt{ell2}\,\mathbf a_2.
+$$
+
+Thus `alpha1` is the orbital in the bra reference cell, while `alpha2` is
+the orbital in the ket cell displaced by `ell1*a1 + ell2*a2`:
 
 ```toml
 hopping = '''
@@ -103,6 +112,20 @@ Hermitian partner,
 ```
 
 Invalid or duplicate hopping channels are rejected before any calculation.
+
+Inputs written for the earlier convention
+`<R, alpha1 | H | 0, alpha2>` can be converted without changing the physical
+model by replacing every row
+
+```text
+(alpha1, alpha2, ell1, ell2, t)
+```
+
+with
+
+```text
+(alpha2, alpha1, ell1, ell2, conjugate(t)).
+```
 
 ### 2. Plot the lattice and Brillouin zone
 

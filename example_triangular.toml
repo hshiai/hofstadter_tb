@@ -11,7 +11,7 @@ tau = [
 
 # Nearest-neighbor hopping t = 1 along
 # +/-a1, +/-a2, and +/-(a2-a1).
-# h(alpha1, alpha2, ell): alpha2 -> alpha1
+# h(alpha1, alpha2, ell) = <0, alpha1 | H | ell, alpha2>
 # j  alpha1  alpha2  ell1  ell2  Re(t)  Im(t)
 hopping = '''
 0   0   0    1   0   -1.0   0.0

@@ -93,15 +93,17 @@ def _sample_path(
 def bloch_hamiltonian(model: Model, k_points: FloatArray) -> ComplexArray:
     """Return H0(k) in the article's atomic Bloch convention."""
 
+    # h_ab(ell) = <0, a | H | ell, b>, so the physical displacement is
+    # ell_1*a1 + ell_2*a2 + tau_b - tau_a.
     delta = np.array(
         [
             [hopping.ell1, hopping.ell2]
-            + model.tau[hopping.alpha1]
-            - model.tau[hopping.alpha2]
+            + model.tau[hopping.alpha2]
+            - model.tau[hopping.alpha1]
             for hopping in model.hoppings
         ]
     )
-    phases = np.exp(-1j * _TWO_PI * (k_points @ delta.T))
+    phases = np.exp(1j * _TWO_PI * (k_points @ delta.T))
     matrices = np.zeros(
         (k_points.shape[0], model.n_orbitals, model.n_orbitals),
         dtype=np.complex128,

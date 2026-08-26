@@ -10,16 +10,16 @@ tau = [
 ]
 
 # alpha1, alpha2 = 0, ..., N_orb - 1
-# h(alpha1, alpha2, ell): alpha2 -> alpha1
+# h(alpha1, alpha2, ell) = <0, alpha1 | H | ell, alpha2>
 # j  alpha1  alpha2  ell1  ell2  Re(t)  Im(t)
 hopping = '''
 # nearest neighbor
-0   0   1   0   0  -1.0   0.0
-1   0   1   1   0  -1.0   0.0
-2   0   1   0   1  -1.0   0.0
-3   1   0   0   0  -1.0   0.0
-4   1   0  -1   0  -1.0   0.0
-5   1   0   0  -1  -1.0   0.0
+0   1   0   0   0  -1.0   0.0
+1   1   0   1   0  -1.0   0.0
+2   1   0   0   1  -1.0   0.0
+3   0   1   0   0  -1.0   0.0
+4   0   1  -1   0  -1.0   0.0
+5   0   1   0  -1  -1.0   0.0
 
 # onsite
 6  0  0   0  0  0.0   0.0

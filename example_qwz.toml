@@ -11,35 +11,35 @@ tau = [
 ]
 
 # Half-BHZ/QWZ parameters used in the article: A = B = 1, M = -1.
-# h(alpha1, alpha2, ell): alpha2 -> alpha1
+# h(alpha1, alpha2, ell) = <0, alpha1 | H | ell, alpha2>
 # j  alpha1  alpha2  ell1  ell2  Re(t)  Im(t)
 hopping = '''
 # Onsite term: M sigma_z
 0    0   0    0   0   -1.0   0.0
 1    1   1    0   0    1.0   0.0
 
-# +a1 hopping: (i/2) sigma_x - (1/2) sigma_z
+# +a1 hopping: (-i/2) sigma_x - (1/2) sigma_z
 2    0   0    1   0   -0.5   0.0
-3    0   1    1   0    0.0   0.5
-4    1   0    1   0    0.0   0.5
+3    1   0    1   0    0.0   -0.5
+4    0   1    1   0    0.0   -0.5
 5    1   1    1   0    0.5   0.0
 
 # -a1 Hermitian partners
 6    0   0   -1   0   -0.5   0.0
-7    1   0   -1   0    0.0  -0.5
-8    0   1   -1   0    0.0  -0.5
+7    0   1   -1   0    0.0  0.5
+8    1   0   -1   0    0.0  0.5
 9    1   1   -1   0    0.5   0.0
 
-# +a2 hopping: (i/2) sigma_y - (1/2) sigma_z
+# +a2 hopping: (-i/2) sigma_y - (1/2) sigma_z
 10   0   0    0   1   -0.5   0.0
-11   0   1    0   1    0.5   0.0
-12   1   0    0   1   -0.5   0.0
+11   1   0    0   1    0.5   0.0
+12   0   1    0   1   -0.5   0.0
 13   1   1    0   1    0.5   0.0
 
 # -a2 Hermitian partners
 14   0   0    0  -1   -0.5   0.0
-15   1   0    0  -1    0.5   0.0
-16   0   1    0  -1   -0.5   0.0
+15   0   1    0  -1    0.5   0.0
+16   1   0    0  -1   -0.5   0.0
 17   1   1    0  -1    0.5   0.0
 '''
 

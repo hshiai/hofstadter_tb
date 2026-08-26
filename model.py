@@ -44,10 +44,12 @@ class Hopping:
 
 @dataclass(frozen=True, slots=True)
 class Model:
-    """Zero-field tight-binding model in the article's convention.
+    """Zero-field tight-binding model in the article's atomic convention.
 
     ``tau[alpha]`` stores the fractional coordinates
     ``(xi_1^alpha, xi_2^alpha)`` without wrapping them into ``[0, 1)``.
+    A hopping ``h(alpha1, alpha2, ell)`` is the matrix element
+    ``<0, alpha1 | H | ell, alpha2>``.
     """
 
     name: str

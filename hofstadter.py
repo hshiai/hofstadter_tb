@@ -258,14 +258,15 @@ class _MagneticHamiltonianBuilder:
             count=n_hoppings,
         )
 
+        # Wannier90 convention: h_ab(ell) = <0, a | H | ell, b>.
         self.delta1 = (
-            ell1 + model.tau[alpha, 0] - model.tau[alpha_prime, 0]
+            ell1 + model.tau[alpha_prime, 0] - model.tau[alpha, 0]
         )
         self.delta2 = (
-            ell2 + model.tau[alpha, 1] - model.tau[alpha_prime, 1]
+            ell2 + model.tau[alpha_prime, 1] - model.tau[alpha, 1]
         )
         s_prime = np.arange(q, dtype=np.int64)[None, :]
-        s = (s_prime + ell1[:, None]) % q
+        s = (s_prime - ell1[:, None]) % q
         self.row = np.asarray(
             s * model.n_orbitals + alpha[:, None],
             dtype=np.int32,
@@ -279,17 +280,17 @@ class _MagneticHamiltonianBuilder:
             1j
             * _TWO_PI
             * flux
-            * (s_prime - s + ell1[:, None])
+            * (s_prime - s - ell1[:, None])
             * model.tau[alpha_prime, 1][:, None]
         )
         peierls_phase = np.exp(
-            -1j
+            1j
             * np.pi
             * flux
             * (
                 2.0 * s
                 + 2.0 * model.tau[alpha, 0][:, None]
-                - self.delta1[:, None]
+                + self.delta1[:, None]
             )
             * self.delta2[:, None]
         )
@@ -303,7 +304,7 @@ class _MagneticHamiltonianBuilder:
             dtype=np.complex128,
         )
         k_phase = np.exp(
-            -1j
+            1j
             * _TWO_PI
             * (
                 points[:, 0, None] * self.delta1[None, :] / self.q
