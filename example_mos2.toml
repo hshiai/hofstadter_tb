@@ -18287,7 +18287,15 @@ n_k = 50
 [hofstadter.spectrum]
 # Preview settings only; increase q_max and k_mesh carefully.
 flux_min = 0.0
-flux_max = 0.25
-q_max = 37
+flux_max = 0.2
+q_max = 91
 k_mesh = [3, 3]
 k_mesh_q1 = [9, 9]
+
+# energy range
+energy_min = -3
+energy_max = 0.5
+
+# filling range
+n_min = 12
+n_max = 18

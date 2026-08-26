@@ -214,6 +214,109 @@ def _as_k_points(k_points: object) -> tuple[FloatArray, bool]:
     return np.ascontiguousarray(points), single_point
 
 
+class _MagneticHamiltonianBuilder:
+    """Cache the k-independent matrix-element data for one fixed flux."""
+
+    __slots__ = (
+        "base_value",
+        "column",
+        "delta1",
+        "delta2",
+        "dimension",
+        "q",
+        "row",
+    )
+
+    def __init__(self, model: Model, p: int, q: int) -> None:
+        _validate_flux(p, q)
+        n_hoppings = model.n_hoppings
+        self.dimension = q * model.n_orbitals
+        self.q = q
+        alpha = np.fromiter(
+            (hopping.alpha1 for hopping in model.hoppings),
+            dtype=np.intp,
+            count=n_hoppings,
+        )
+        alpha_prime = np.fromiter(
+            (hopping.alpha2 for hopping in model.hoppings),
+            dtype=np.intp,
+            count=n_hoppings,
+        )
+        ell1 = np.fromiter(
+            (hopping.ell1 for hopping in model.hoppings),
+            dtype=np.int64,
+            count=n_hoppings,
+        )
+        ell2 = np.fromiter(
+            (hopping.ell2 for hopping in model.hoppings),
+            dtype=np.int64,
+            count=n_hoppings,
+        )
+        amplitude = np.fromiter(
+            (hopping.amplitude for hopping in model.hoppings),
+            dtype=np.complex128,
+            count=n_hoppings,
+        )
+
+        self.delta1 = (
+            ell1 + model.tau[alpha, 0] - model.tau[alpha_prime, 0]
+        )
+        self.delta2 = (
+            ell2 + model.tau[alpha, 1] - model.tau[alpha_prime, 1]
+        )
+        s_prime = np.arange(q, dtype=np.int64)[None, :]
+        s = (s_prime + ell1[:, None]) % q
+        self.row = np.asarray(
+            s * model.n_orbitals + alpha[:, None],
+            dtype=np.int32,
+        )
+        self.column = np.asarray(
+            s_prime * model.n_orbitals + alpha_prime[:, None],
+            dtype=np.int32,
+        )
+        flux = p / q
+        translation_phase = np.exp(
+            1j
+            * _TWO_PI
+            * flux
+            * (s_prime - s + ell1[:, None])
+            * model.tau[alpha_prime, 1][:, None]
+        )
+        peierls_phase = np.exp(
+            -1j
+            * np.pi
+            * flux
+            * (
+                2.0 * s
+                + 2.0 * model.tau[alpha, 0][:, None]
+                - self.delta1[:, None]
+            )
+            * self.delta2[:, None]
+        )
+        self.base_value = amplitude[:, None] * translation_phase * peierls_phase
+
+    def matrices(self, points: FloatArray) -> ComplexArray:
+        """Evaluate all k-dependent matrix elements for one point batch."""
+
+        matrices = np.zeros(
+            (points.shape[0], self.dimension, self.dimension),
+            dtype=np.complex128,
+        )
+        k_phase = np.exp(
+            -1j
+            * _TWO_PI
+            * (
+                points[:, 0, None] * self.delta1[None, :] / self.q
+                + points[:, 1, None] * self.delta2[None, :]
+            )
+        )
+        for index in range(self.delta1.size):
+            matrices[:, self.row[index], self.column[index]] += (
+                k_phase[:, index, None] * self.base_value[index, None, :]
+            )
+        return matrices
+
+
 def magnetic_hamiltonian(
     model: Model,
     p: int,
@@ -222,53 +325,8 @@ def magnetic_hamiltonian(
 ) -> ComplexArray:
     """Evaluate the article's explicit oblique-gauge matrix element."""
 
-    _validate_flux(p, q)
     points, single_point = _as_k_points(k_points)
-    dimension = q * model.n_orbitals
-    matrices = np.zeros((points.shape[0], dimension, dimension), dtype=np.complex128)
-    s_prime = np.arange(q, dtype=np.int64)
-    flux = p / q
-
-    for hopping in model.hoppings:
-        alpha = hopping.alpha1
-        alpha_prime = hopping.alpha2
-
-        # Delta_{j,mu}^{alpha,alpha'} = ell_{j,mu} + xi_mu^alpha - xi_mu^alpha'.
-        delta1 = hopping.ell1 + model.tau[alpha, 0] - model.tau[alpha_prime, 0]
-        delta2 = hopping.ell2 + model.tau[alpha, 1] - model.tau[alpha_prime, 1]
-
-        # delta^(q)_{s,s'+ell_{j,1}} fixes one row s for every s'.
-        s = (s_prime + hopping.ell1) % q
-        row = s * model.n_orbitals + alpha
-        column = s_prime * model.n_orbitals + alpha_prime
-
-        # The three factors below are the three exponentials in the article,
-        # in the same order as the explicit oblique-gauge formula.
-        k_phase = np.exp(
-            -1j
-            * _TWO_PI
-            * (points[:, 0] * delta1 / q + points[:, 1] * delta2)
-        )
-        translation_phase = np.exp(
-            1j
-            * _TWO_PI
-            * flux
-            * (s_prime - s + hopping.ell1)
-            * model.tau[alpha_prime, 1]
-        )
-        peierls_phase = np.exp(
-            -1j
-            * np.pi
-            * flux
-            * (2.0 * s + 2.0 * model.tau[alpha, 0] - delta1)
-            * delta2
-        )
-        matrices[:, row, column] += (
-            hopping.amplitude
-            * k_phase[:, None]
-            * (translation_phase * peierls_phase)[None, :]
-        )
-
+    matrices = _MagneticHamiltonianBuilder(model, p, q).matrices(points)
     return matrices[0] if single_point else matrices
 
 
@@ -291,11 +349,19 @@ def magnetic_energies(
     ):
         raise ValueError("'batch_size' must be a positive integer.")
 
-    energies = np.empty((points.shape[0], q * model.n_orbitals), dtype=np.float64)
-    for start in range(0, points.shape[0], batch_size):
-        stop = min(start + batch_size, points.shape[0])
+    dimension = q * model.n_orbitals
+    energies = np.empty((points.shape[0], dimension), dtype=np.float64)
+
+    # Bound the temporary stack to roughly 256 MiB.  Previously a fixed batch
+    # of 128 could allocate many GiB for a large q before diagonalization began.
+    bytes_per_matrix = np.dtype(np.complex128).itemsize * dimension * dimension
+    memory_limited_batch = max(1, (256 * 1024**2) // bytes_per_matrix)
+    effective_batch = min(batch_size, memory_limited_batch)
+    builder = _MagneticHamiltonianBuilder(model, p, q)
+    for start in range(0, points.shape[0], effective_batch):
+        stop = min(start + effective_batch, points.shape[0])
         energies[start:stop] = np.linalg.eigvalsh(
-            magnetic_hamiltonian(model, p, q, points[start:stop])
+            builder.matrices(points[start:stop])
         )
     return energies[0] if single_point else energies
 
@@ -524,13 +590,21 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
     )
     _DATA_DIR.mkdir(exist_ok=True)
     data_path = _DATA_DIR / f"{stem}_spectrum.npz"
-    flux_data = []
-    p_data = []
-    q_data = []
-    k1_data = []
-    k2_data = []
-    band_data = []
-    energy_data = []
+    jobs = [
+        (p, q, _spectrum_mesh(task, q))
+        for p, q in fractions
+    ]
+    total_spectrum_points = sum(
+        mesh[0] * mesh[1] * q * model.n_orbitals
+        for _, q, mesh in jobs
+    )
+    flux_data = np.empty(total_spectrum_points, dtype=np.float64)
+    p_data = np.empty(total_spectrum_points, dtype=np.int32)
+    q_data = np.empty(total_spectrum_points, dtype=np.int32)
+    k1_data = np.empty(total_spectrum_points, dtype=np.float64)
+    k2_data = np.empty(total_spectrum_points, dtype=np.float64)
+    band_data = np.empty(total_spectrum_points, dtype=np.int32)
+    energy_data = np.empty(total_spectrum_points, dtype=np.float64)
     wannier_flux_data = []
     wannier_p_data = []
     wannier_q_data = []
@@ -538,22 +612,29 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
     wannier_density_data = []
     wannier_gap_data = []
     interactive_groups = []
+    spectrum_offset = 0
 
-    for p, q in fractions:
+    for p, q, mesh in jobs:
         flux = p / q
-        k_points = _magnetic_mesh(q, _spectrum_mesh(task, q))
+        k_points = _magnetic_mesh(q, mesh)
         energies = magnetic_energies(model, p, q, k_points)
         n_bands = q * model.n_orbitals
         count = k_points.shape[0] * n_bands
-        flux_data.append(np.full(count, flux))
-        p_data.append(np.full(count, p, dtype=np.int32))
-        q_data.append(np.full(count, q, dtype=np.int32))
-        k1_data.append(np.repeat(k_points[:, 0], n_bands))
-        k2_data.append(np.repeat(k_points[:, 1], n_bands))
-        band_data.append(
-            np.tile(np.arange(n_bands, dtype=np.int32), k_points.shape[0])
+        spectrum_slice = slice(spectrum_offset, spectrum_offset + count)
+        flux_data[spectrum_slice] = flux
+        p_data[spectrum_slice] = p
+        q_data[spectrum_slice] = q
+        k1_data[spectrum_slice].reshape(k_points.shape[0], n_bands)[:] = (
+            k_points[:, 0, None]
         )
-        energy_data.append(energies.ravel())
+        k2_data[spectrum_slice].reshape(k_points.shape[0], n_bands)[:] = (
+            k_points[:, 1, None]
+        )
+        band_data[spectrum_slice].reshape(k_points.shape[0], n_bands)[:] = (
+            np.arange(n_bands, dtype=np.int32)[None, :]
+        )
+        energy_data[spectrum_slice] = energies.ravel()
+        spectrum_offset += count
 
         band_min = energies.min(axis=0)
         band_max = energies.max(axis=0)
@@ -581,8 +662,6 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
             wannier_density_data.append(filled_bands / q)
             wannier_gap_data.append(gaps[filled_bands - 1])
 
-    flux_data = np.concatenate(flux_data)
-    energy_data = np.concatenate(energy_data)
     if wannier_gap_data:
         wannier_flux = np.concatenate(wannier_flux_data)
         wannier_p = np.concatenate(wannier_p_data)
@@ -619,11 +698,11 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
         ),
         wannier_gap_threshold=gap_tolerance,
         flux=flux_data,
-        p=np.concatenate(p_data),
-        q=np.concatenate(q_data),
-        k1=np.concatenate(k1_data),
-        k2=np.concatenate(k2_data),
-        band=np.concatenate(band_data),
+        p=p_data,
+        q=q_data,
+        k1=k1_data,
+        k2=k2_data,
+        band=band_data,
         energy=energy_data,
         wannier_flux=wannier_flux,
         wannier_p=wannier_p,

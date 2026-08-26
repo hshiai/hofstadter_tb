@@ -102,21 +102,21 @@ n_k = 80
 [hofstadter.spectrum]
 
 # A signed interval includes both magnetic-field directions in one run.
-flux_min = -1.0
+flux_min = 0.0
 flux_max = 1.0
 
 # Fast preview. For a final figure, increase q_max to 67 and the minimum
 # k_mesh to [6, 6].
-q_max = 35
-k_mesh = [3, 3]
+q_max = 41
+k_mesh = [15, 15]
 
 # Optional adaptive sampling: use 20 x 20 points at q = 1 and decrease as
 # 1/sqrt(q), never going below k_mesh.
-k_mesh_q1 = [30, 30]
+k_mesh_q1 = [100, 100]
 
 # Energy window
-# energy_min = -0.1
-# energy_max = 2.0
+energy_min = -0.001
+energy_max = 0.02
 
 # filling window
 # n_min = 2.5

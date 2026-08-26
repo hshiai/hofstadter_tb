@@ -256,7 +256,8 @@ white corresponding to zero and darker blue corresponding to a larger gap.
   it keeps the fixed `k_mesh` behavior used by older input files.
 - Increase `q_max` for a denser Hofstadter spectrum.
 - The magnetic Hamiltonian dimension is `q * N_orb`, so large denominators are
-  more expensive.
+  more expensive. Dense batches are automatically reduced at large `q` so that
+  the temporary Hamiltonian stack remains below about 256 MiB.
 - Output directories are created automatically.
 
 All energies are expressed in the same units as the hopping amplitudes.
