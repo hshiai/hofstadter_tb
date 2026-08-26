@@ -1,0 +1,47 @@
+name = "wannier90_model"
+
+# The calculation path remains in the TOML file. Coordinates are fractional:
+# k = k1*b1 + k2*b2.
+band_path = '''
+G   0.0   0.0
+X   0.5   0.0
+M   0.5   0.5
+G   0.0   0.0
+'''
+n_k = 100
+
+# Read seedname_tb.dat from the directory containing this TOML file. The tag
+# may include a relative path, for example tag = "wannier/seedname".
+# seedname_wsvec.dat is used automatically when it is present.
+[wannier90]
+tag = "seedname"
+
+# Optional. Matrix elements at or below this magnitude (in eV) are omitted.
+# The default is 1.0e-12.
+# hopping_tolerance = 1.0e-12
+
+[hofstadter]
+mode = "spectrum"
+
+[hofstadter.band]
+p = 1
+q = 7
+k_path = '''
+0.0   0.0
+1.0   0.0
+1.0   1.0
+'''
+n_k = 80
+
+[hofstadter.spectrum]
+flux_min = -0.3
+flux_max = 0.3
+q_max = 67
+k_mesh = [6, 6]
+k_mesh_q1 = [20, 20]
+
+# Optional display windows.
+# energy_min = -1.0
+# energy_max = 1.0
+# n_min = 0.5
+# n_max = 1.5

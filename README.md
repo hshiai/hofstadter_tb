@@ -8,6 +8,7 @@ companion work.
 ## Features
 
 - General two-dimensional Bravais lattices and orbital embeddings
+- Direct import of Wannier90 `seedname_tb.dat` models
 - Real or complex hopping amplitudes
 - Automatic real-space Hermiticity validation
 - Real-space lattice and Brillouin-zone plots
@@ -38,8 +39,8 @@ cd hofstadter_tb
 ```
 
 The repository includes square, triangular, honeycomb, Kagome, QWZ,
-topological flat-band, and imbalanced-bipartite flat-band (IBF) example inputs. Pass the desired TOML file to
-any command:
+topological flat-band, imbalanced-bipartite flat-band (IBF), and Wannier90
+example inputs. Pass the desired TOML file to any command:
 
 ```bash
 python3 model.py example_triangular.toml
@@ -126,6 +127,67 @@ with
 ```text
 (alpha2, alpha1, ell1, ell2, conjugate(t)).
 ```
+
+### Import a Wannier90 model
+
+Wannier90 can write the lattice vectors, Hamiltonian matrix elements, and
+position-operator matrix elements together in `seedname_tb.dat` by setting
+`write_tb = true`. To import that file directly, replace the manual `a1`, `a2`,
+`tau`, and `hopping` fields with
+
+```toml
+name = "MoS2_22band"
+
+band_path = '''
+G   0.0   0.0
+K   0.3333333333333333   0.3333333333333333
+M   0.5   0.0
+G   0.0   0.0
+'''
+n_k = 100
+
+[wannier90]
+tag = "MoS2"
+
+[hofstadter]
+mode = "spectrum"
+
+[hofstadter.spectrum]
+flux_min = -0.3
+flux_max = 0.3
+q_max = 67
+k_mesh = [6, 6]
+```
+
+Here `tag = "MoS2"` reads `MoS2_tb.dat` from the directory containing the
+TOML file. A relative path is also accepted, for example
+`tag = "wannier/MoS2"`. The calculation controls (`band_path`, `n_k`, and all
+`[hofstadter]` tables) remain in the TOML file, but manual lattice, embedding,
+and hopping fields must be omitted. A complete editable input is provided in
+`template_wannier90.toml`.
+
+The importer follows the
+[official Wannier90 file format](https://wannier90.readthedocs.io/en/latest/user_guide/wannier90/files/#seedname-tb-dat):
+
+- `a1` and `a2` are obtained from the first two lattice vectors. Their plane is
+  represented in an intrinsic two-dimensional Cartesian frame, so the input
+  slab need not be aligned with the Cartesian xy plane.
+- Orbital embeddings are the fractional in-plane coordinates of the real
+  diagonal elements of
+  $\langle 0m|\mathbf r|0m\rangle$ from the `R = (0,0,0)` position block.
+- Hoppings are the Wannier90 matrix elements
+  $\langle 0m|H|Rn\rangle$. Wigner-Seitz degeneracies are included.
+- If the companion `seedname_wsvec.dat` exists, its orbital-dependent
+  shortest-image translations are applied automatically, including the
+  equal-weight average over degenerate shortest images.
+- Matrix elements with magnitude at or below `1e-12` eV are treated as
+  numerical zeros. Override this with, for example,
+  `hopping_tolerance = 1e-9` inside `[wannier90]`.
+
+The present code is two-dimensional. A significant hopping with a nonzero
+third lattice coordinate is rejected. For a nominally isolated slab with tiny
+residual coupling across the vacuum, choose an appropriate
+`hopping_tolerance` explicitly.
 
 ### 2. Plot the lattice and Brillouin zone
 
@@ -235,6 +297,8 @@ n_max = 1.5
 The program evaluates every signed reduced fraction `p/q` in the requested
 interval with `q <= q_max`, keeping `p` signed and `q` positive. Thus a single
 run with `flux_min = -1.0` and `flux_max = 1.0` covers both field directions.
+During the calculation, the terminal displays the completed fraction count and
+percentage on one updating line.
 The optional energy and filling windows control the displayed ranges of the
 static and interactive figures. The compressed NPZ file continues to store the
 complete calculated spectrum and gap data. The Wannier-diagram vertical axis

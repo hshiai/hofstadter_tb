@@ -614,8 +614,14 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
     wannier_gap_data = []
     interactive_groups = []
     spectrum_offset = 0
+    total_jobs = len(jobs)
+    print(
+        f"Spectrum progress: 0/{total_jobs} (0.0%)",
+        end="",
+        flush=True,
+    )
 
-    for p, q, mesh in jobs:
+    for job_index, (p, q, mesh) in enumerate(jobs, start=1):
         flux = p / q
         k_points = _magnetic_mesh(q, mesh)
         energies = magnetic_energies(model, p, q, k_points)
@@ -662,6 +668,12 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
             wannier_band_data.append(filled_bands.astype(np.int32, copy=False))
             wannier_density_data.append(filled_bands / q)
             wannier_gap_data.append(gaps[filled_bands - 1])
+        print(
+            f"\rSpectrum progress: {job_index}/{total_jobs} "
+            f"({100.0 * job_index / total_jobs:.1f}%)",
+            end="\n" if job_index == total_jobs else "",
+            flush=True,
+        )
 
     if wannier_gap_data:
         wannier_flux = np.concatenate(wannier_flux_data)

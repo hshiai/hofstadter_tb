@@ -212,20 +212,84 @@ def _check_hermiticity(hoppings: tuple[Hopping, ...]) -> None:
             )
 
 
+def _load_wannier90_model(path: Path, data: dict[str, object]) -> Model:
+    from wannier90_io import load_wannier90
+
+    table = data.get("wannier90")
+    if not isinstance(table, dict):
+        raise ValueError("'[wannier90]' must be a TOML table.")
+    unknown = table.keys() - {"tag", "hopping_tolerance"}
+    if unknown:
+        raise ValueError(
+            f"Unknown '[wannier90]' field(s): {', '.join(sorted(unknown))}."
+        )
+    tag = table.get("tag")
+    if not isinstance(tag, str) or not tag.strip():
+        raise ValueError("'[wannier90].tag' must be a nonempty seedname.")
+    tolerance = table.get("hopping_tolerance", 1.0e-12)
+    if (
+        isinstance(tolerance, bool)
+        or not isinstance(tolerance, (int, float))
+        or not np.isfinite(float(tolerance))
+        or float(tolerance) < 0.0
+    ):
+        raise ValueError(
+            "'[wannier90].hopping_tolerance' must be a finite nonnegative number."
+        )
+    tolerance = float(tolerance)
+
+    imported = load_wannier90(path, tag.strip(), tolerance)
+    hoppings = tuple(
+        Hopping(
+            index,
+            hopping.alpha1,
+            hopping.alpha2,
+            hopping.ell1,
+            hopping.ell2,
+            hopping.amplitude,
+        )
+        for index, hopping in enumerate(imported.hoppings)
+    )
+    _check_hermiticity(hoppings)
+    return Model(
+        name=data["name"],
+        a1=imported.a1,
+        a2=imported.a2,
+        tau=imported.tau,
+        hoppings=hoppings,
+    )
+
+
 def _load_model(path: Path) -> Model:
     """Load one model file."""
 
     with path.open("rb") as stream:
         data = tomllib.load(stream)
 
-    required = {"name", "a1", "a2", "tau", "hopping"}
-    optional = {"band_path", "n_k", "hofstadter"}
-    missing = required - data.keys()
-    extra = data.keys() - required - optional
+    common_required = {"name"}
+    manual = {"a1", "a2", "tau", "hopping"}
+    optional = {"band_path", "n_k", "hofstadter", "wannier90"}
+    missing = common_required - data.keys()
+    extra = data.keys() - common_required - manual - optional
     if missing:
         raise ValueError(f"Missing model field(s): {', '.join(sorted(missing))}.")
     if extra:
         raise ValueError(f"Unknown model field(s): {', '.join(sorted(extra))}.")
+
+    if "wannier90" in data:
+        overlap = manual & data.keys()
+        if overlap:
+            raise ValueError(
+                "A '[wannier90]' model must omit the manual field(s): "
+                f"{', '.join(sorted(overlap))}."
+            )
+        return _load_wannier90_model(path, data)
+
+    missing_manual = manual - data.keys()
+    if missing_manual:
+        raise ValueError(
+            f"Missing model field(s): {', '.join(sorted(missing_manual))}."
+        )
 
     tau = _as_float_array(data["tau"], "tau")
     if tau.ndim != 2 or tau.shape[0] == 0 or tau.shape[1] != 2:
