@@ -237,6 +237,13 @@ The active calculation is selected by
 mode = "band"       # or "spectrum"
 ```
 
+Optionally set `omp_num_threads = 6` in `[hofstadter]` to override the BLAS/OpenMP
+thread count while running `hofstadter.py`, for either mode. Omit this key for
+the default `None`, which leaves the calling environment's settings unchanged.
+An explicit positive integer requires `threadpoolctl`
+(`python3 -m pip install threadpoolctl`); the previous thread limits are restored
+after the calculation. Only `example_mos2.toml` enables this override by default.
+
 For a single magnetic-band calculation, use a signed integer `p` and a positive
 integer `q`. A spectrum calculation uses the signed interval from `flux_min`
 to `flux_max`.

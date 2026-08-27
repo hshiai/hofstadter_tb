@@ -18,6 +18,7 @@ hopping_tolerance = 1.0e-4
 
 [hofstadter]
 mode = "spectrum"
+omp_num_threads = 6
 
 [hofstadter.band]
 p = 1
@@ -32,7 +33,7 @@ n_k = 50
 [hofstadter.spectrum]
 # Preview settings only; increase q_max and k_mesh carefully.
 flux_min = 0.0
-flux_max = 0.2
+flux_max = 0.1
 q_max = 91
 k_mesh = [3, 3]
 k_mesh_q1 = [9, 9]
