@@ -23,7 +23,7 @@ ComplexArray = NDArray[np.complex128]
 _TWO_PI: Final = 2.0 * np.pi
 _FIGURE_DIR: Final = Path(__file__).with_name("figure")
 _DATA_DIR: Final = Path(__file__).with_name("data")
-_DPI: Final = 220
+_DEFAULT_DPI: Final = 500
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +33,7 @@ class BandTask:
     vertices: FloatArray
     n_k: int
     omp_num_threads: int | None = None
+    dpi: int = _DEFAULT_DPI
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +46,7 @@ class SpectrumTask:
     energy_window: tuple[float, float] | None = None
     filling_window: tuple[float, float] | None = None
     omp_num_threads: int | None = None
+    dpi: int = _DEFAULT_DPI
 
 
 def _integer(
@@ -148,6 +150,7 @@ def load_hofstadter_task(path: Path) -> BandTask | SpectrumTask:
         if "omp_num_threads" in root
         else None
     )
+    dpi = _integer(root, "dpi", 1) if "dpi" in root else _DEFAULT_DPI
     mode = root.get("mode")
     if mode == "band":
         table = root.get("band")
@@ -160,6 +163,7 @@ def load_hofstadter_task(path: Path) -> BandTask | SpectrumTask:
         return BandTask(
             p, q, vertices, _integer(table, "n_k", 2),
             omp_num_threads=omp_num_threads,
+            dpi=dpi,
         )
 
     if mode == "spectrum":
@@ -209,6 +213,7 @@ def load_hofstadter_task(path: Path) -> BandTask | SpectrumTask:
             _optional_window(table, "energy_min", "energy_max"),
             _optional_window(table, "n_min", "n_max"),
             omp_num_threads=omp_num_threads,
+            dpi=dpi,
         )
 
     raise ValueError("'[hofstadter].mode' must be 'band' or 'spectrum'.")
@@ -446,7 +451,7 @@ def _spectrum_mesh(task: SpectrumTask, q: int) -> tuple[int, int]:
     if task.k_mesh_q1 is None:
         return task.k_mesh
     return tuple(
-        max(minimum, ceil(at_q1 / sqrt(q)))
+        max(minimum, ceil(at_q1 / q))
         for minimum, at_q1 in zip(task.k_mesh, task.k_mesh_q1)
     )
 
@@ -528,7 +533,7 @@ def run_band(model: Model, task: BandTask) -> tuple[Path, Path]:
     axes.set_ylabel(r"$E$")
     axes.set_title(rf"{model.name}: $\Phi/\Phi_0={task.p}/{task.q}$")
     axes.margins(x=0.0)
-    figure.savefig(figure_path, dpi=_DPI)
+    figure.savefig(figure_path, dpi=task.dpi)
     figure.clear()
     return data_path, figure_path
 
@@ -779,7 +784,8 @@ def run_spectrum(
     axes.margins(x=0.01, y=0.03)
     if task.energy_window is not None:
         axes.set_ylim(*task.energy_window)
-    figure.savefig(spectrum_path, dpi=_DPI)
+    figure.savefig(spectrum_path, dpi=task.dpi)
+    figure.set_layout_engine("none")
 
     from matplotlib.collections import LineCollection
 
@@ -822,7 +828,7 @@ def run_spectrum(
             antialiaseds=True,
         )
     axes.set_title(f"{model.name}: Hofstadter band ranges")
-    figure.savefig(ranges_path, dpi=_DPI)
+    figure.savefig(ranges_path, dpi=task.dpi)
     figure.clear()
 
     wannier_path = _FIGURE_DIR / f"{stem}_wannier.png"
@@ -872,7 +878,7 @@ def run_spectrum(
     axes.set_ylabel(r"$n$ per primitive cell")
     axes.set_title(f"{model.name}: Wannier diagram")
     axes.margins(x=0.01)
-    figure.savefig(wannier_path, dpi=_DPI)
+    figure.savefig(wannier_path, dpi=task.dpi)
     figure.clear()
 
     interactive_path = _FIGURE_DIR / f"{stem}_interactive.html"

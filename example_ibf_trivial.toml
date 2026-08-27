@@ -111,7 +111,7 @@ q_max = 37
 k_mesh = [3, 3]
 
 # Optional adaptive sampling: use 20 x 20 points at q = 1 and decrease as
-# 1/sqrt(q), never going below k_mesh.
+# 1/q, never going below k_mesh.
 k_mesh_q1 = [21, 21]
 
 # Energy window
