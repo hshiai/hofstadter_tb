@@ -18,7 +18,11 @@ hopping_tolerance = 1.0e-4
 
 [hofstadter]
 mode = "spectrum"
+<<<<<<< HEAD
 omp_num_threads = 8
+=======
+omp_num_threads = 6
+>>>>>>> a0d6382f9fb79221286b5140e6c705f6caca13f7
 dpi = 500
 
 [hofstadter.band]
