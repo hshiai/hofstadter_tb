@@ -8,7 +8,7 @@ M    0.5                 0.5
 G    0.0                 0.0
 Kp   0.3333333333333333  0.6666666666666667
 '''
-n_k = 120
+n_k = 360
 
 # Reads mos2_tb.dat beside this TOML file. No a1, a2, tau, or hopping table is
 # needed. mos2_wsvec.dat will also be used automatically if it is present.
@@ -18,6 +18,8 @@ hopping_tolerance = 1.0e-4
 
 [hofstadter]
 mode = "spectrum"
+omp_num_threads = 8
+dpi = 500
 
 [hofstadter.band]
 p = 1
@@ -32,9 +34,9 @@ n_k = 50
 [hofstadter.spectrum]
 # Preview settings only; increase q_max and k_mesh carefully.
 flux_min = 0.0
-flux_max = 0.2
-q_max = 91
-k_mesh = [3, 3]
+flux_max = 0.1
+q_max = 199
+k_mesh = [1, 1]
 k_mesh_q1 = [9, 9]
 
 energy_min = -3.0

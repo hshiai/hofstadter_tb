@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from contextlib import nullcontext
 from dataclasses import dataclass
 from fractions import Fraction
 from math import ceil, gcd, sqrt
@@ -22,7 +23,7 @@ ComplexArray = NDArray[np.complex128]
 _TWO_PI: Final = 2.0 * np.pi
 _FIGURE_DIR: Final = Path(__file__).with_name("figure")
 _DATA_DIR: Final = Path(__file__).with_name("data")
-_DPI: Final = 220
+_DEFAULT_DPI: Final = 500
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +32,8 @@ class BandTask:
     q: int
     vertices: FloatArray
     n_k: int
+    omp_num_threads: int | None = None
+    dpi: int = _DEFAULT_DPI
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +45,8 @@ class SpectrumTask:
     k_mesh_q1: tuple[int, int] | None
     energy_window: tuple[float, float] | None = None
     filling_window: tuple[float, float] | None = None
+    omp_num_threads: int | None = None
+    dpi: int = _DEFAULT_DPI
 
 
 def _integer(
@@ -140,6 +145,12 @@ def load_hofstadter_task(path: Path) -> BandTask | SpectrumTask:
     if not isinstance(root, dict):
         raise ValueError("Missing '[hofstadter]' section.")
 
+    omp_num_threads = (
+        _integer(root, "omp_num_threads", 1)
+        if "omp_num_threads" in root
+        else None
+    )
+    dpi = _integer(root, "dpi", 1) if "dpi" in root else _DEFAULT_DPI
     mode = root.get("mode")
     if mode == "band":
         table = root.get("band")
@@ -149,7 +160,11 @@ def load_hofstadter_task(path: Path) -> BandTask | SpectrumTask:
         q = _integer(table, "q", 1)
         _validate_flux(p, q)
         vertices = _parse_path(table.get("k_path"))
-        return BandTask(p, q, vertices, _integer(table, "n_k", 2))
+        return BandTask(
+            p, q, vertices, _integer(table, "n_k", 2),
+            omp_num_threads=omp_num_threads,
+            dpi=dpi,
+        )
 
     if mode == "spectrum":
         table = root.get("spectrum")
@@ -197,6 +212,8 @@ def load_hofstadter_task(path: Path) -> BandTask | SpectrumTask:
             None if mesh_q1 is None else (mesh_q1[0], mesh_q1[1]),
             _optional_window(table, "energy_min", "energy_max"),
             _optional_window(table, "n_min", "n_max"),
+            omp_num_threads=omp_num_threads,
+            dpi=dpi,
         )
 
     raise ValueError("'[hofstadter].mode' must be 'band' or 'spectrum'.")
@@ -434,7 +451,7 @@ def _spectrum_mesh(task: SpectrumTask, q: int) -> tuple[int, int]:
     if task.k_mesh_q1 is None:
         return task.k_mesh
     return tuple(
-        max(minimum, ceil(at_q1 / sqrt(q)))
+        max(minimum, ceil(at_q1 / q))
         for minimum, at_q1 in zip(task.k_mesh, task.k_mesh_q1)
     )
 
@@ -516,7 +533,7 @@ def run_band(model: Model, task: BandTask) -> tuple[Path, Path]:
     axes.set_ylabel(r"$E$")
     axes.set_title(rf"{model.name}: $\Phi/\Phi_0={task.p}/{task.q}$")
     axes.margins(x=0.0)
-    figure.savefig(figure_path, dpi=_DPI)
+    figure.savefig(figure_path, dpi=task.dpi)
     figure.clear()
     return data_path, figure_path
 
@@ -563,8 +580,10 @@ def _packed_spectrum_mask(
     return width, height, encoded
 
 
-def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Path]:
-    """Calculate the spectrum and its density-flux Wannier diagram."""
+def run_spectrum(
+    model: Model, task: SpectrumTask
+) -> tuple[Path, Path, Path, Path, Path]:
+    """Calculate the spectrum, per-band ranges, and density-flux Wannier diagram."""
 
     if task.filling_window is not None:
         n_min, n_max = task.filling_window
@@ -606,6 +625,7 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
     k2_data = np.empty(total_spectrum_points, dtype=np.float64)
     band_data = np.empty(total_spectrum_points, dtype=np.int32)
     energy_data = np.empty(total_spectrum_points, dtype=np.float64)
+    band_ranges = []
     wannier_flux_data = []
     wannier_p_data = []
     wannier_q_data = []
@@ -624,6 +644,7 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
     for job_index, (p, q, mesh) in enumerate(jobs, start=1):
         flux = p / q
         k_points = _magnetic_mesh(q, mesh)
+        # The independent (p, q) = (0, 1) job evaluates H0 on the full-BZ mesh.
         energies = magnetic_energies(model, p, q, k_points)
         n_bands = q * model.n_orbitals
         count = k_points.shape[0] * n_bands
@@ -645,6 +666,11 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
 
         band_min = energies.min(axis=0)
         band_max = energies.max(axis=0)
+        ranges = np.empty((n_bands, 2, 2), dtype=np.float64)
+        ranges[:, :, 0] = flux
+        ranges[:, 0, 1] = band_min
+        ranges[:, 1, 1] = band_max
+        band_ranges.append(ranges)
         gaps = band_min[1:] - band_max[:-1]
         filled_bands = np.flatnonzero(gaps > gap_tolerance) + 1
         gap_intervals = np.column_stack(
@@ -739,7 +765,7 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
             & (energy_data <= task.energy_window[1])
         )
     )
-    axes.scatter(
+    spectrum_points = axes.scatter(
         flux_data[spectrum_visible],
         energy_data[spectrum_visible],
         s=0.35,
@@ -758,7 +784,51 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
     axes.margins(x=0.01, y=0.03)
     if task.energy_window is not None:
         axes.set_ylim(*task.energy_window)
-    figure.savefig(spectrum_path, dpi=_DPI)
+    figure.savefig(spectrum_path, dpi=task.dpi)
+    figure.set_layout_engine("none")
+
+    from matplotlib.collections import LineCollection
+
+    ranges_path = _FIGURE_DIR / f"{stem}_spectrum_ranges.png"
+    ranges = np.concatenate(band_ranges)
+    if task.energy_window is not None:
+        # Keep bands crossing the window even if neither endpoint lies inside it.
+        ranges = ranges[
+            (ranges[:, 1, 1] >= task.energy_window[0])
+            & (ranges[:, 0, 1] <= task.energy_window[1])
+        ]
+    point_size = float(spectrum_points.get_sizes()[0])
+    point_color = spectrum_points.get_facecolor()
+    # Reuse the original axes and freeze their limits before replacing the dots.
+    axes.set_xlim(axes.get_xlim())
+    axes.set_ylim(axes.get_ylim())
+    spectrum_points.remove()
+    nonzero = ranges[:, 0, 1] != ranges[:, 1, 1]
+    axes.add_collection(
+        LineCollection(
+            ranges[nonzero],
+            colors=point_color,
+            linewidths=sqrt(point_size),
+            capstyle="round",
+            antialiaseds=True,
+            # Pixel snapping can collapse subpixel-width bands to empty paths.
+            snap=False,
+        ),
+        autolim=False,
+    )
+    if np.any(~nonzero):
+        # Backends may drop zero-length paths; draw the exact limiting circle.
+        axes.scatter(
+            ranges[~nonzero, 0, 0],
+            ranges[~nonzero, 0, 1],
+            s=point_size,
+            marker="o",
+            color=point_color,
+            linewidths=0.0,
+            antialiaseds=True,
+        )
+    axes.set_title(f"{model.name}: Hofstadter band ranges")
+    figure.savefig(ranges_path, dpi=task.dpi)
     figure.clear()
 
     wannier_path = _FIGURE_DIR / f"{stem}_wannier.png"
@@ -808,7 +878,7 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
     axes.set_ylabel(r"$n$ per primitive cell")
     axes.set_title(f"{model.name}: Wannier diagram")
     axes.margins(x=0.01)
-    figure.savefig(wannier_path, dpi=_DPI)
+    figure.savefig(wannier_path, dpi=task.dpi)
     figure.clear()
 
     interactive_path = _FIGURE_DIR / f"{stem}_interactive.html"
@@ -872,17 +942,30 @@ def run_spectrum(model: Model, task: SpectrumTask) -> tuple[Path, Path, Path, Pa
         gap_threshold=gap_tolerance,
         groups=interactive_groups_visible,
     )
-    return data_path, spectrum_path, wannier_path, interactive_path
+    return data_path, spectrum_path, wannier_path, interactive_path, ranges_path
 
 
 def main() -> None:
     input_path = model_path_from_command_line()
-    model = load_model(input_path)
     task = load_hofstadter_task(input_path)
-    if isinstance(task, BandTask):
-        output_paths = run_band(model, task)
-    else:
-        output_paths = run_spectrum(model, task)
+    thread_limit = nullcontext()
+    if task.omp_num_threads is not None:
+        try:
+            from threadpoolctl import threadpool_limits
+        except ImportError as error:
+            raise ImportError(
+                "Setting 'omp_num_threads' requires threadpoolctl; install it "
+                "with 'python3 -m pip install threadpoolctl'."
+            ) from error
+        # Limit BLAS as well as OpenMP: OpenBLAS may use pthreads instead.
+        thread_limit = threadpool_limits(limits=task.omp_num_threads)
+
+    with thread_limit:
+        model = load_model(input_path)
+        if isinstance(task, BandTask):
+            output_paths = run_band(model, task)
+        else:
+            output_paths = run_spectrum(model, task)
 
     print("Real-space Hermiticity check passed.")
     for path in output_paths:

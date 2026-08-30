@@ -237,6 +237,18 @@ The active calculation is selected by
 mode = "band"       # or "spectrum"
 ```
 
+Optionally set `omp_num_threads = 6` in `[hofstadter]` to override the BLAS/OpenMP
+thread count while running `hofstadter.py`, for either mode. Omit this key for
+the default `None`, which leaves the calling environment's settings unchanged.
+An explicit positive integer requires `threadpoolctl`
+(`python3 -m pip install threadpoolctl`); the previous thread limits are restored
+after the calculation. Only `example_mos2.toml` enables this override by default.
+
+Optionally set `dpi = 500` in `[hofstadter]` to control the resolution of PNG
+files produced by `hofstadter.py` (magnetic bands, spectrum, band ranges, and
+Wannier diagram). The value must be a positive integer and defaults to `500`
+when omitted. It does not change the numerical data or interactive HTML.
+
 For a single magnetic-band calculation, use a signed integer `p` and a positive
 integer `q`. A spectrum calculation uses the signed interval from `flux_min`
 to `flux_max`.
@@ -283,7 +295,7 @@ q_max = 67
 k_mesh = [6, 6]
 
 # Optional: denser sampling for the broader small-q bands.  The mesh decreases
-# as 1/sqrt(q) and never goes below k_mesh.
+# as 1/q and never goes below k_mesh.
 k_mesh_q1 = [20, 20]
 
 # Optional display windows. Omit either pair to use the full energy or
@@ -339,7 +351,7 @@ white corresponding to zero and darker blue corresponding to a larger gap.
 
 - Increase `k_mesh` to obtain more reliable band edges and gap sizes.
 - If `k_mesh_q1` is given, the spectrum uses
-  `max(k_mesh, ceil(k_mesh_q1/sqrt(q)))` in each momentum direction.  Omitting
+  `max(k_mesh, ceil(k_mesh_q1/q))` in each momentum direction.  Omitting
   it keeps the fixed `k_mesh` behavior used by older input files.
 - Increase `q_max` for a denser Hofstadter spectrum.
 - The magnetic Hamiltonian dimension is `q * N_orb`, so large denominators are

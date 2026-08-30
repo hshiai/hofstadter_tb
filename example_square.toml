@@ -60,9 +60,9 @@ n_k = 80
 
 # Scan all signed reduced fluxes in this interval with q <= q_max.
 # This mode saves both the energy spectrum and the density-flux Wannier diagram.
-flux_min = -0.3
-flux_max = 0.7
-q_max = 67
+flux_min = 0.0
+flux_max = 1.0
+q_max = 45
 
 # Minimum mesh for large q. Small q uses the denser adaptive mesh below.
 k_mesh = [3, 3]

@@ -83,10 +83,6 @@ n_k = 80
 flux_min = -1.0
 flux_max = 1.0
 
-# Fast preview. For a final figure, increase q_max to 67 and the minimum
-# k_mesh to [6, 6].
-q_max = 45
-k_mesh = [4, 4]
-
-# Use more momentum points for the broader bands at small q.
-k_mesh_q1 = [20, 20]
+q_max = 37
+k_mesh = [1, 1]
+k_mesh_q1 = [30, 30]
