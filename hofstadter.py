@@ -6,8 +6,10 @@ import base64
 from contextlib import nullcontext
 from dataclasses import dataclass
 from fractions import Fraction
+import hashlib
 from math import ceil, gcd, sqrt
 from pathlib import Path
+import tempfile
 import tomllib
 from typing import Final
 
@@ -24,6 +26,7 @@ _TWO_PI: Final = 2.0 * np.pi
 _FIGURE_DIR: Final = Path(__file__).with_name("figure")
 _DATA_DIR: Final = Path(__file__).with_name("data")
 _DEFAULT_DPI: Final = 500
+_SPECTRUM_DATA_VERSION: Final = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +50,8 @@ class SpectrumTask:
     filling_window: tuple[float, float] | None = None
     omp_num_threads: int | None = None
     dpi: int = _DEFAULT_DPI
+    gap_threshold: float | None = None
+    resume_from: Path | None = None
 
 
 def _integer(
@@ -204,16 +209,37 @@ def load_hofstadter_task(path: Path) -> BandTask | SpectrumTask:
                     "'k_mesh_q1' must contain two integers not smaller than "
                     "the corresponding 'k_mesh' values."
                 )
+        gap_threshold = (
+            _number(table, "gap_threshold")
+            if "gap_threshold" in table
+            else None
+        )
+        if gap_threshold is not None and gap_threshold < 0.0:
+            raise ValueError("'gap_threshold' must be a nonnegative number.")
+        resume_value = table.get("resume_from")
+        if resume_value is None:
+            resume_from = None
+        elif not isinstance(resume_value, str) or not resume_value.strip():
+            raise ValueError("'resume_from' must be a nonempty path string.")
+        else:
+            resume_from = Path(resume_value).expanduser()
+            if not resume_from.is_absolute():
+                resume_from = path.parent / resume_from
+            resume_from = resume_from.resolve()
         return SpectrumTask(
-            flux_min,
-            flux_max,
-            _integer(table, "q_max", 1),
-            (mesh[0], mesh[1]),
-            None if mesh_q1 is None else (mesh_q1[0], mesh_q1[1]),
-            _optional_window(table, "energy_min", "energy_max"),
-            _optional_window(table, "n_min", "n_max"),
+            flux_min=flux_min,
+            flux_max=flux_max,
+            q_max=_integer(table, "q_max", 1),
+            k_mesh=(mesh[0], mesh[1]),
+            k_mesh_q1=(
+                None if mesh_q1 is None else (mesh_q1[0], mesh_q1[1])
+            ),
+            gap_threshold=gap_threshold,
+            energy_window=_optional_window(table, "energy_min", "energy_max"),
+            filling_window=_optional_window(table, "n_min", "n_max"),
             omp_num_threads=omp_num_threads,
             dpi=dpi,
+            resume_from=resume_from,
         )
 
     raise ValueError("'[hofstadter].mode' must be 'band' or 'spectrum'.")
@@ -456,6 +482,313 @@ def _spectrum_mesh(task: SpectrumTask, q: int) -> tuple[int, int]:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _ResumeSpectrum:
+    energies: dict[tuple[int, int, int, int], FloatArray]
+    source_points: int
+    ignored_points: int
+    legacy: bool
+
+
+def _model_fingerprint(model: Model) -> str:
+    """Hash every model input that affects the magnetic Hamiltonian."""
+
+    digest = hashlib.sha256()
+    digest.update(b"hofstadter-model-v1\0")
+    digest.update(model.name.encode("utf-8"))
+    digest.update(b"\0")
+    for array in (model.a1, model.a2, model.tau):
+        values = np.asarray(array, dtype="<f8", order="C")
+        digest.update(np.asarray(values.shape, dtype="<i8").tobytes())
+        digest.update(values.tobytes())
+    for hopping in model.hoppings:
+        digest.update(
+            np.asarray(
+                (
+                    hopping.j,
+                    hopping.alpha1,
+                    hopping.alpha2,
+                    hopping.ell1,
+                    hopping.ell2,
+                ),
+                dtype="<i8",
+            ).tobytes()
+        )
+        digest.update(
+            np.asarray(
+                (hopping.amplitude.real, hopping.amplitude.imag),
+                dtype="<f8",
+            ).tobytes()
+        )
+    return digest.hexdigest()
+
+
+def _npz_scalar(data: object, key: str, path: Path) -> object:
+    if key not in data:
+        raise ValueError(f"Resume file {path} is missing metadata '{key}'.")
+    value = np.asarray(data[key])
+    if value.shape != ():
+        raise ValueError(f"Resume metadata '{key}' in {path} must be a scalar.")
+    return value.item()
+
+
+def _target_grid_key(
+    p: int,
+    q: int,
+    k1: float,
+    k2: float,
+    mesh: tuple[int, int],
+) -> tuple[int, int, int, int] | None:
+    """Map a momentum to integer indices when it belongs to ``mesh``."""
+
+    if not np.isfinite(k1) or not np.isfinite(k2):
+        return None
+    scaled1 = k1 * mesh[0]
+    scaled2 = k2 * q * mesh[1]
+    index1 = int(np.rint(scaled1))
+    index2 = int(np.rint(scaled2))
+    tolerance = 1.0e-9
+    if (
+        not 0 <= index1 < mesh[0]
+        or not 0 <= index2 < mesh[1]
+        or abs(scaled1 - index1) > tolerance
+        or abs(scaled2 - index2) > tolerance
+    ):
+        return None
+    return p, q, index1, index2
+
+
+def _load_resume_spectrum(
+    path: Path,
+    model: Model,
+    task: SpectrumTask,
+    job_meshes: dict[tuple[int, int], tuple[int, int]],
+) -> _ResumeSpectrum:
+    """Load validated per-momentum spectra reusable on the target meshes."""
+
+    if not path.is_file():
+        raise ValueError(f"Resume file does not exist: {path}")
+
+    try:
+        archive = np.load(path, allow_pickle=False)
+    except (OSError, ValueError) as error:
+        raise ValueError(f"Cannot read resume file {path}: {error}") from error
+
+    with archive as data:
+        name = _npz_scalar(data, "name", path)
+        flux_min = _npz_scalar(data, "flux_min", path)
+        flux_max = _npz_scalar(data, "flux_max", path)
+        q_max = _npz_scalar(data, "q_max", path)
+        if name != model.name:
+            raise ValueError(
+                f"Resume model name {name!r} does not match {model.name!r}."
+            )
+        if not np.isclose(float(flux_min), task.flux_min, rtol=0.0, atol=1.0e-14):
+            raise ValueError("Resume flux_min does not match the requested task.")
+        if not np.isclose(float(flux_max), task.flux_max, rtol=0.0, atol=1.0e-14):
+            raise ValueError("Resume flux_max does not match the requested task.")
+        if int(q_max) != task.q_max:
+            raise ValueError("Resume q_max does not match the requested task.")
+
+        legacy = "spectrum_data_version" not in data
+        if legacy:
+            if "model_fingerprint" in data:
+                raise ValueError(
+                    "Resume file has a model fingerprint but no data-format version."
+                )
+        else:
+            version = int(_npz_scalar(data, "spectrum_data_version", path))
+            if version != _SPECTRUM_DATA_VERSION:
+                raise ValueError(
+                    f"Unsupported resume data version {version}; expected "
+                    f"{_SPECTRUM_DATA_VERSION}."
+                )
+            fingerprint = _npz_scalar(data, "model_fingerprint", path)
+            if fingerprint != _model_fingerprint(model):
+                raise ValueError(
+                    "Resume model fingerprint does not match the current model."
+                )
+
+        required = ("flux", "p", "q", "k1", "k2", "band", "energy")
+        missing = [key for key in required if key not in data]
+        if missing:
+            raise ValueError(
+                f"Resume file {path} is missing array(s): {', '.join(missing)}."
+            )
+        flux_data = np.asarray(data["flux"])
+        p_data = np.asarray(data["p"])
+        q_data = np.asarray(data["q"])
+        k1_data = np.asarray(data["k1"])
+        k2_data = np.asarray(data["k2"])
+        band_data = np.asarray(data["band"])
+        energy_data = np.asarray(data["energy"])
+
+        arrays = {
+            "flux": flux_data,
+            "p": p_data,
+            "q": q_data,
+            "k1": k1_data,
+            "k2": k2_data,
+            "band": band_data,
+            "energy": energy_data,
+        }
+        lengths = set()
+        for key, values in arrays.items():
+            if values.ndim != 1:
+                raise ValueError(f"Resume array '{key}' must be one-dimensional.")
+            lengths.add(values.size)
+        if len(lengths) != 1 or not lengths or energy_data.size == 0:
+            raise ValueError("Resume spectrum arrays must have one equal nonzero size.")
+        for key, values in (("p", p_data), ("q", q_data), ("band", band_data)):
+            if values.dtype.kind not in "iu":
+                raise ValueError(f"Resume array '{key}' must have integer dtype.")
+        for key, values in (
+            ("flux", flux_data),
+            ("k1", k1_data),
+            ("k2", k2_data),
+            ("energy", energy_data),
+        ):
+            if values.dtype.kind not in "fiu" or not np.all(np.isfinite(values)):
+                raise ValueError(
+                    f"Resume array '{key}' must contain finite real numbers."
+                )
+
+        cached: dict[tuple[int, int, int, int], FloatArray] = {}
+        source_points = 0
+        ignored_points = 0
+        offset = 0
+        while offset < energy_data.size:
+            p = int(p_data[offset])
+            q = int(q_data[offset])
+            if q < 1:
+                raise ValueError("Resume data contain a nonpositive denominator.")
+            mesh = job_meshes.get((p, q))
+            if mesh is None:
+                raise ValueError(
+                    f"Resume data contain unexpected reduced flux p/q={p}/{q}."
+                )
+            n_bands = q * model.n_orbitals
+            stop = offset + n_bands
+            if stop > energy_data.size:
+                raise ValueError("Resume data end inside a momentum-band block.")
+            block = slice(offset, stop)
+            expected_bands = np.arange(n_bands, dtype=band_data.dtype)
+            if (
+                not np.all(p_data[block] == p)
+                or not np.all(q_data[block] == q)
+                or not np.array_equal(band_data[block], expected_bands)
+                or not np.all(k1_data[block] == k1_data[offset])
+                or not np.all(k2_data[block] == k2_data[offset])
+                or not np.allclose(
+                    flux_data[block], p / q, rtol=0.0, atol=1.0e-14
+                )
+            ):
+                raise ValueError(
+                    f"Malformed momentum-band block at resume row {offset}."
+                )
+            block_energies = energy_data[block]
+            if np.any(np.diff(block_energies) < -1.0e-10):
+                raise ValueError(
+                    f"Resume eigenvalues are not sorted at row {offset}."
+                )
+
+            source_points += 1
+            key = _target_grid_key(
+                p,
+                q,
+                float(k1_data[offset]),
+                float(k2_data[offset]),
+                mesh,
+            )
+            if key is None:
+                ignored_points += 1
+            elif key in cached:
+                raise ValueError(
+                    f"Resume file contains duplicate target momentum {key}."
+                )
+            else:
+                cached[key] = np.asarray(block_energies, dtype=np.float64).copy()
+            offset = stop
+
+    if not cached:
+        raise ValueError("Resume file contains no momenta reusable by this task.")
+    return _ResumeSpectrum(cached, source_points, ignored_points, legacy)
+
+
+def _validate_legacy_resume(
+    path: Path,
+    resume: _ResumeSpectrum,
+    model: Model,
+    job_meshes: dict[tuple[int, int], tuple[int, int]],
+) -> None:
+    """Check legacy data without a fingerprint against inexpensive spectra."""
+
+    zero_keys = sorted(
+        key for key in resume.energies if key[0] == 0 and key[1] == 1
+    )
+    if len(zero_keys) > 256:
+        sample = np.linspace(0, len(zero_keys) - 1, 256, dtype=np.int64)
+        selected = [zero_keys[int(index)] for index in sample]
+    else:
+        selected = zero_keys
+    nonzero_keys = sorted(
+        (key for key in resume.energies if key[0] != 0),
+        key=lambda key: (key[1], abs(key[0]), key[0], key[2], key[3]),
+    )
+    if nonzero_keys:
+        selected.append(nonzero_keys[0])
+    if not selected:
+        selected.append(min(resume.energies))
+
+    grouped: dict[tuple[int, int], list[tuple[int, int, int, int]]] = {}
+    for key in selected:
+        grouped.setdefault(key[:2], []).append(key)
+    checked = 0
+    for (p, q), keys in grouped.items():
+        mesh = job_meshes[(p, q)]
+        points = np.asarray(
+            [
+                (key[2] / mesh[0], key[3] / (q * mesh[1]))
+                for key in keys
+            ],
+            dtype=np.float64,
+        )
+        expected = np.vstack([resume.energies[key] for key in keys])
+        actual = magnetic_energies(model, p, q, points)
+        if not np.allclose(actual, expected, rtol=5.0e-10, atol=5.0e-10):
+            difference = float(np.max(np.abs(actual - expected)))
+            raise ValueError(
+                f"Legacy resume spectra in {path} do not match the current "
+                f"model (maximum checked difference {difference:.3e})."
+            )
+        checked += len(keys)
+    print(
+        f"Legacy resume file has no model fingerprint; validated {checked} "
+        "cached momentum spectra against the current model."
+    )
+
+
+def _savez_compressed_atomic(path: Path, **arrays: object) -> None:
+    """Write an NPZ beside its destination and atomically replace it."""
+
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            prefix=f".{path.stem}.",
+            suffix=".tmp",
+            dir=path.parent,
+            delete=False,
+        ) as stream:
+            temporary_path = Path(stream.name)
+            np.savez_compressed(stream, **arrays)
+            stream.flush()
+        temporary_path.replace(path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
 def _integer_ticks(lower: float, upper: float, maximum: int = 7) -> FloatArray:
     """Return at most ``maximum`` integer ticks inside a closed interval."""
 
@@ -495,7 +828,7 @@ def run_band(model: Model, task: BandTask) -> tuple[Path, Path]:
         f"{model.name}_hofstadter_p{_number_tag(task.p)}_q{task.q}_band"
     )
 
-    _DATA_DIR.mkdir(exist_ok=True)
+    _DATA_DIR.mkdir(parents=True, exist_ok=True)
     data_path = _DATA_DIR / f"{stem}.dat"
     path_text = " -> ".join(
         f"({point[0]:.10g},{point[1]:.10g})" for point in task.vertices
@@ -516,7 +849,7 @@ def run_band(model: Model, task: BandTask) -> tuple[Path, Path]:
     )
 
     Figure, FigureCanvasAgg = _plot_imports()
-    _FIGURE_DIR.mkdir(exist_ok=True)
+    _FIGURE_DIR.mkdir(parents=True, exist_ok=True)
     figure_path = _FIGURE_DIR / f"{stem}.png"
     figure = Figure(figsize=(6.0, 4.5), layout="constrained")
     FigureCanvasAgg(figure)
@@ -600,20 +933,49 @@ def run_spectrum(
     )
     if not fractions:
         raise ValueError("The requested range contains no fraction with q <= q_max.")
-    hopping_scale = max(abs(hopping.amplitude) for hopping in model.hoppings)
-    gap_tolerance = 0.01 * hopping_scale
+    if task.gap_threshold is None:
+        hopping_scale = max(abs(hopping.amplitude) for hopping in model.hoppings)
+        gap_threshold = 0.01 * hopping_scale
+    else:
+        gap_threshold = task.gap_threshold
 
     stem = (
         f"{model.name}_hofstadter_flux"
         f"{_number_tag(task.flux_min)}_to_{_number_tag(task.flux_max)}"
         f"_qmax{task.q_max}"
     )
-    _DATA_DIR.mkdir(exist_ok=True)
+    _DATA_DIR.mkdir(parents=True, exist_ok=True)
     data_path = _DATA_DIR / f"{stem}_spectrum.npz"
     jobs = [
         (p, q, _spectrum_mesh(task, q))
         for p, q in fractions
     ]
+    job_meshes = {(p, q): mesh for p, q, mesh in jobs}
+    resume: _ResumeSpectrum | None = None
+    resume_path: Path | None = None
+    if task.resume_from is not None:
+        # Once an incrementally completed destination exists, it is the most
+        # complete cache for later reruns. Otherwise use the configured seed.
+        resume_path = data_path if data_path.is_file() else task.resume_from
+        print(f"Loading resume spectrum from {resume_path}")
+        resume = _load_resume_spectrum(
+            resume_path,
+            model,
+            task,
+            job_meshes,
+        )
+        if resume.legacy:
+            _validate_legacy_resume(
+                resume_path,
+                resume,
+                model,
+                job_meshes,
+            )
+        print(
+            f"Resume cache contains {len(resume.energies)} reusable "
+            f"momentum points out of {resume.source_points}; "
+            f"{resume.ignored_points} do not belong to the target meshes."
+        )
     total_spectrum_points = sum(
         mesh[0] * mesh[1] * q * model.n_orbitals
         for _, q, mesh in jobs
@@ -634,6 +996,8 @@ def run_spectrum(
     wannier_gap_data = []
     interactive_groups = []
     spectrum_offset = 0
+    reused_momenta = 0
+    computed_momenta = 0
     total_jobs = len(jobs)
     print(
         f"Spectrum progress: 0/{total_jobs} (0.0%)",
@@ -645,8 +1009,38 @@ def run_spectrum(
         flux = p / q
         k_points = _magnetic_mesh(q, mesh)
         # The independent (p, q) = (0, 1) job evaluates H0 on the full-BZ mesh.
-        energies = magnetic_energies(model, p, q, k_points)
         n_bands = q * model.n_orbitals
+        if resume is None:
+            energies = magnetic_energies(model, p, q, k_points)
+            computed_momenta += k_points.shape[0]
+        else:
+            energies = np.empty(
+                (k_points.shape[0], n_bands),
+                dtype=np.float64,
+            )
+            missing_indices = []
+            for point_index in range(k_points.shape[0]):
+                key = (
+                    p,
+                    q,
+                    point_index // mesh[1],
+                    point_index % mesh[1],
+                )
+                cached = resume.energies.get(key)
+                if cached is None:
+                    missing_indices.append(point_index)
+                else:
+                    energies[point_index] = cached
+                    reused_momenta += 1
+            if missing_indices:
+                missing = np.asarray(missing_indices, dtype=np.int64)
+                energies[missing] = magnetic_energies(
+                    model,
+                    p,
+                    q,
+                    k_points[missing],
+                )
+                computed_momenta += missing.size
         count = k_points.shape[0] * n_bands
         spectrum_slice = slice(spectrum_offset, spectrum_offset + count)
         flux_data[spectrum_slice] = flux
@@ -672,7 +1066,7 @@ def run_spectrum(
         ranges[:, 1, 1] = band_max
         band_ranges.append(ranges)
         gaps = band_min[1:] - band_max[:-1]
-        filled_bands = np.flatnonzero(gaps > gap_tolerance) + 1
+        filled_bands = np.flatnonzero(gaps > gap_threshold) + 1
         gap_intervals = np.column_stack(
             (
                 filled_bands,
@@ -701,6 +1095,12 @@ def run_spectrum(
             flush=True,
         )
 
+    if resume is not None:
+        print(
+            f"Resume summary: reused {reused_momenta} momentum points and "
+            f"computed {computed_momenta} missing points."
+        )
+
     if wannier_gap_data:
         wannier_flux = np.concatenate(wannier_flux_data)
         wannier_p = np.concatenate(wannier_p_data)
@@ -716,8 +1116,10 @@ def run_spectrum(
         wannier_density = np.empty(0, dtype=np.float64)
         wannier_gap = np.empty(0, dtype=np.float64)
 
-    np.savez_compressed(
+    _savez_compressed_atomic(
         data_path,
+        spectrum_data_version=np.int32(_SPECTRUM_DATA_VERSION),
+        model_fingerprint=_model_fingerprint(model),
         name=model.name,
         flux_min=task.flux_min,
         flux_max=task.flux_max,
@@ -735,7 +1137,7 @@ def run_spectrum(
             () if task.filling_window is None else task.filling_window,
             dtype=np.float64,
         ),
-        wannier_gap_threshold=gap_tolerance,
+        wannier_gap_threshold=gap_threshold,
         flux=flux_data,
         p=p_data,
         q=q_data,
@@ -752,7 +1154,7 @@ def run_spectrum(
     )
 
     Figure, FigureCanvasAgg = _plot_imports()
-    _FIGURE_DIR.mkdir(exist_ok=True)
+    _FIGURE_DIR.mkdir(parents=True, exist_ok=True)
     spectrum_path = _FIGURE_DIR / f"{stem}_spectrum.png"
     figure = Figure(figsize=(6.0, 5.0), layout="constrained")
     FigureCanvasAgg(figure)
@@ -939,7 +1341,7 @@ def run_spectrum(
         spectrum_width=spectrum_width,
         spectrum_height=spectrum_height,
         spectrum_mask=spectrum_mask,
-        gap_threshold=gap_tolerance,
+        gap_threshold=gap_threshold,
         groups=interactive_groups_visible,
     )
     return data_path, spectrum_path, wannier_path, interactive_path, ranges_path

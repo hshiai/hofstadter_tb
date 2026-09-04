@@ -18,11 +18,7 @@ hopping_tolerance = 1.0e-4
 
 [hofstadter]
 mode = "spectrum"
-<<<<<<< HEAD
-omp_num_threads = 8
-=======
 omp_num_threads = 6
->>>>>>> a0d6382f9fb79221286b5140e6c705f6caca13f7
 dpi = 500
 
 [hofstadter.band]
@@ -36,12 +32,13 @@ k_path = '''
 n_k = 50
 
 [hofstadter.spectrum]
-# Preview settings only; increase q_max and k_mesh carefully.
+# Production settings for the manuscript spectrum.
 flux_min = 0.0
 flux_max = 0.1
 q_max = 199
 k_mesh = [1, 1]
-k_mesh_q1 = [9, 9]
+k_mesh_q1 = [36, 36]
+gap_threshold = 0.04
 
 energy_min = -3.0
 energy_max = 0.5

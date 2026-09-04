@@ -298,6 +298,14 @@ k_mesh = [6, 6]
 # as 1/q and never goes below k_mesh.
 k_mesh_q1 = [20, 20]
 
+# Optional minimum gap shown in the Wannier diagram, in the same energy units
+# as the hopping amplitudes. If omitted, the default below is used.
+gap_threshold = 0.01
+
+# Optional incremental seed from a previous compatible spectrum calculation.
+# Relative paths are resolved from the model TOML file.
+resume_from = "data/previous_spectrum.npz"
+
 # Optional display windows. Omit either pair to use the full energy or
 # filling range. Both bounds in a pair must be provided together.
 energy_min = -1.0
@@ -315,6 +323,12 @@ The optional energy and filling windows control the displayed ranges of the
 static and interactive figures. The compressed NPZ file continues to store the
 complete calculated spectrum and gap data. The Wannier-diagram vertical axis
 shows only integer filling ticks within the selected range.
+When `resume_from` is provided, the program validates the previous NPZ and
+reuses every momentum that lies on the requested target mesh. Only missing
+momenta are diagonalized; all band ranges, gaps, and figures are then rebuilt
+from the complete target data. Once the normal destination NPZ exists, later
+runs use it instead of the original seed because it contains the most recently
+completed target mesh. Output NPZ files are replaced atomically.
 The momentum mesh covers the spectrally distinct magnetic Brillouin zone,
 
 ```text
@@ -338,14 +352,15 @@ Open the HTML file in a web browser. Clicking a spectral gap highlights the
 corresponding point $(\Phi/\Phi_0,n=r/q)$ in the Wannier diagram; clicking a
 Wannier point highlights the corresponding energy gap.
 
-Only gaps larger than
+Only gaps larger than `gap_threshold` are included in the Wannier diagram. If
+`gap_threshold` is omitted, it defaults to
 
 ```text
 0.01 * max(|hopping amplitude|)
 ```
 
-are included in the Wannier diagram. The color represents the gap size, with
-white corresponding to zero and darker blue corresponding to a larger gap.
+The color represents the gap size, with white corresponding to zero and darker
+blue corresponding to a larger gap.
 
 ## Accuracy and performance
 

@@ -107,16 +107,8 @@ flux_min = 0.0
 flux_max = 1.0
 
 q_max = 37
-<<<<<<< HEAD
 k_mesh = [1, 1]
 k_mesh_q1 = [227, 227]
-=======
-k_mesh = [3, 3]
-
-# Optional adaptive sampling: use 20 x 20 points at q = 1 and decrease as
-# 1/q, never going below k_mesh.
-k_mesh_q1 = [21, 21]
->>>>>>> a0d6382f9fb79221286b5140e6c705f6caca13f7
 
 # Energy window
 energy_min = -0.02
@@ -125,4 +117,3 @@ energy_max = +0.03
 # filling window
 # n_min = 2.5
 # n_max = 5.0
-

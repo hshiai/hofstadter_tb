@@ -40,6 +40,15 @@ q_max = 67
 k_mesh = [6, 6]
 k_mesh_q1 = [20, 20]
 
+# Optional minimum spectral gap to include in the Wannier diagram, in the
+# model's energy units. The default is 0.01 * max(|hopping amplitude|).
+# gap_threshold = 0.01
+
+# Optional incremental seed. Relative paths are resolved from this TOML file.
+# Existing compatible momentum spectra are reused and only missing target-mesh
+# points are diagonalized. A completed output is reused on later reruns.
+# resume_from = "data/previous_spectrum.npz"
+
 # Optional display windows.
 # energy_min = -1.0
 # energy_max = 1.0
